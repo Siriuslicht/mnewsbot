@@ -1,0 +1,53 @@
+services:
+  bot:
+    build: .
+    image: marketnewsfeed-telegram-bot:latest
+    container_name: marketnewsfeed-telegram-bot
+    # Restarts after crashes and after a server reboot (Docker itself must be
+    # enabled at boot: `sudo systemctl enable docker`). Stays down only if you
+    # stop it yourself.
+    restart: unless-stopped
+    init: true  # tiny init as PID 1: forwards signals, reaps zombie processes
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: production
+      LOG_FORMAT: json
+      # Database + lock live on the named volume, so restarts, rebuilds and
+      # redeploys never lose the posted-news history (= no re-posting).
+      DATABASE_URL: sqlite:////app/data/database.db
+      LOCK_FILE: /app/data/scheduler.lock
+    volumes:
+      - bot-data:/app/data
+    # Bound to localhost only: health endpoints are for the server itself,
+    # not the internet. Put a reverse proxy in front if you need remote access.
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Hardening: immutable filesystem except /app/data and /tmp, no Linux
+    # capabilities, no privilege escalation, bounded resources.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 100
+    # Give the bot time to finish the message it is sending on `docker stop`.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    # Docker rotates container logs: at most 5 x 10 MB on disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  bot-data:

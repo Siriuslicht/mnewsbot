@@ -1,0 +1,100 @@
+# CI/CD
+#   every push / PR:  tests + dependency audit + Docker image build & import check
+#   push to main:     the above, then deploy to the VPS over SSH
+#
+# Deploy needs these repository secrets (Settings -> Secrets and variables -> Actions):
+#   VPS_HOST         server IP or hostname
+#   VPS_USER         SSH user (e.g. deploy)
+#   VPS_SSH_KEY      private key whose public key is in the server's authorized_keys
+#   VPS_KNOWN_HOSTS  output of `ssh-keyscan -t ed25519 <host>` (pins the server identity)
+# Until they exist, the deploy job is skipped and CI stays green.
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # same as the Docker image
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Tests
+        run: pytest
+
+      - name: Dependency vulnerability audit
+        run: pip-audit -r requirements.txt
+
+  docker:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t marketnewsfeed-telegram-bot:ci .
+
+      - name: Image starts Python and imports the app
+        # Fake credentials: this only proves the image is complete. Real
+        # Telegram access is checked by the health check after deploy.
+        run: |
+          docker run --rm \
+            -e BOT_TOKEN=123456789:ci_fake_token_abcdefghijklmnopqrstuvwx \
+            -e CHANNEL_ID=@ci_channel \
+            marketnewsfeed-telegram-bot:ci python -c "import app.main; print('image OK')"
+
+  deploy:
+    needs: docker
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    # Never run two deploys at once; queue instead of cancelling a running one.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+    steps:
+      - name: Check deploy secrets
+        id: secrets
+        run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ]; then
+            echo "::notice::VPS secrets not configured; skipping deploy."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure SSH
+        if: steps.secrets.outputs.configured == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Deploy
+        if: steps.secrets.outputs.configured == 'true'
+        # The server's authorized_keys entry forces this key to run
+        # scripts/deploy.sh only (see DEPLOYMENT.md), so the command sent
+        # here is ignored by the server; it is kept for servers without that
+        # restriction.
+        run: ssh -o BatchMode=yes "$VPS_USER@$VPS_HOST" "cd ~/mnewsbot && ./scripts/deploy.sh"

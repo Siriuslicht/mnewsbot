@@ -1,0 +1,35 @@
+# Optional: run with PostgreSQL instead of SQLite.
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+# Requires POSTGRES_PASSWORD in .env.
+services:
+  bot:
+    environment:
+      DATABASE_URL: postgresql+psycopg://bot:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/marketnews
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    container_name: marketnewsfeed-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_DB: marketnews
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    # No published ports: only the bot container can reach the database.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot -d marketnews"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pg-data:
