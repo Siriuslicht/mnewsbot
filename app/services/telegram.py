@@ -96,12 +96,10 @@ def _build_message(item: NewsItem, text_limit: int) -> str:
     else:
         lines.append(escape(_shorten(item.text, text_limit), quote=False))
 
-    # Shown as "Source: https://x.com/..." (site only); the link opens the full article.
+    # Footer is just a blue "Source..." link that opens the original article.
     if item.link and _is_safe_url(item.link):
-        parsed = urlparse(item.link)
-        label = escape(f"{parsed.scheme}://{parsed.netloc}/...", quote=False)
         href = escape(item.link, quote=True)
-        lines += ["", f'Source: <a href="{href}">{label}</a>']
+        lines += ["", f'<a href="{href}">Source...</a>']
 
     return "\n".join(lines)
 

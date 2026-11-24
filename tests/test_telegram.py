@@ -46,16 +46,15 @@ def test_format_escapes_html(make_item) -> None:  # type: ignore[no-untyped-def]
     item = make_item(1, text="S&P <500> up", link="https://example.com/a?b=1&c=\"2\"")
     message = format_news_message(item)
     assert "S&amp;P &lt;500&gt; up" in message
-    assert (
-        'Source: <a href="https://example.com/a?b=1&amp;c=&quot;2&quot;">https://example.com/...</a>'
-    ) in message
+    assert '<a href="https://example.com/a?b=1&amp;c=&quot;2&quot;">Source...</a>' in message
 
 
-def test_source_shows_only_the_site(make_item) -> None:  # type: ignore[no-untyped-def]
+def test_footer_is_only_a_source_link(make_item) -> None:  # type: ignore[no-untyped-def]
     message = format_news_message(make_item(1, link="https://x.com/DeItaone/status/2125215045726638437"))
     assert message.endswith(
-        'Source: <a href="https://x.com/DeItaone/status/2125215045726638437">https://x.com/...</a>'
+        '\n\n<a href="https://x.com/DeItaone/status/2125215045726638437">Source...</a>'
     )
+    assert "x.com" not in message.replace('href="https://x.com/DeItaone/status/2125215045726638437"', "")
 
 
 def test_format_uses_uzbek_translation(make_item) -> None:  # type: ignore[no-untyped-def]
@@ -76,7 +75,7 @@ def test_format_has_no_category_or_direction(make_item) -> None:  # type: ignore
 def test_format_drops_unsafe_links(make_item) -> None:  # type: ignore[no-untyped-def]
     message = format_news_message(make_item(1, link="javascript:alert(1)"))
     assert "javascript" not in message
-    assert "Source:" not in message
+    assert "Source" not in message
 
 
 def test_format_truncates_without_breaking_entities(make_item) -> None:  # type: ignore[no-untyped-def]
