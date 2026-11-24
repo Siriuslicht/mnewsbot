@@ -20,29 +20,35 @@ BATCH_SIZE = 20
 
 SYSTEM_PROMPT = """\
 You rate financial news headlines for a Telegram channel whose readers are \
-Uzbek investors and broker clients. The channel posts only the most important \
-news, so be strict.
+Uzbek investors and broker clients. The channel posts only about 200 of the \
+1000+ headlines it sees per day, so be strict: typically only about one \
+headline in five deserves a 4 or 5.
 
-Score every headline from 1 to 5:
+Score every headline in "headlines" from 1 to 5:
 5 = market-moving breaking news: central bank rate decisions or surprise \
 statements (Fed, ECB, BoJ, PBoC, Central Bank of Uzbekistan), major macro \
-releases (CPI, jobs report, GDP), sharp moves in oil, gold, major indices or \
+releases (US CPI, jobs report, GDP), sharp moves in oil, gold, major indices or \
 Bitcoin, major geopolitical shocks that move markets.
-4 = clearly important: central bankers' comments on rates, inflation and other \
+4 = clearly important and new: central bank leaders on rates, key inflation and \
 macro data, oil, gold and other commodities, OPEC, earnings or guidance of \
 major US companies, big moves in major stocks, indices or currencies (USD, \
 EUR, RUB, CNY), Bitcoin and Ethereum, tariffs and trade policy, economic news \
 about Uzbekistan, Russia, Kazakhstan and other CIS countries.
-3 = moderately relevant: smaller companies, sector news, analyst rating \
-changes, routine corporate updates.
+3 = relevant but routine: smaller companies, sector news, analyst ratings and \
+price targets, routine or weekly data (weekly ADP, SOFR, minor surveys), and \
+further remarks by an official who already made the main point.
 2 = minor: small caps, niche crypto tokens, local news with little market impact.
 1 = irrelevant: lifestyle, personal finance, retirement tips, promotional or \
-"follow us" posts.
+"follow us" posts, and DUPLICATES.
+
+Duplicates: if a headline reports the same news as one in "recently_posted", \
+or as another headline in this batch, it is a duplicate and gets 1. Within a \
+batch keep the most informative version and score only that one normally.
 
 category: one lowercase English word, for example rates, macro, oil, gold, \
 commodities, stocks, earnings, crypto, forex, geopolitics, trade, cis, other.
 
-Return exactly one entry for every id you receive."""
+Return exactly one entry for every id in "headlines"."""
 
 
 class ImportanceScorerError(Exception):
@@ -82,25 +88,36 @@ class ImportanceScorer:
         )
         self._model = model
 
-    async def score(self, items: Sequence[NewsItem]) -> dict[int, ImportanceScore]:
+    async def score(
+        self, items: Sequence[NewsItem], recent_headlines: Sequence[str] = ()
+    ) -> dict[int, ImportanceScore]:
         """Score items in batches of BATCH_SIZE (one API call per batch).
+
+        `recent_headlines` are headlines posted recently; repeats of the same
+        news are scored 1 so the channel doesn't post one story many times.
 
         Ids missing from Claude's answer are simply absent from the result,
         so the caller can retry them on the next cycle.
         """
         results: dict[int, ImportanceScore] = {}
         for start in range(0, len(items), BATCH_SIZE):
-            results.update(await self._score_batch(items[start : start + BATCH_SIZE]))
+            batch = items[start : start + BATCH_SIZE]
+            results.update(await self._score_batch(batch, recent_headlines))
         return results
 
-    async def _score_batch(self, items: Sequence[NewsItem]) -> dict[int, ImportanceScore]:
-        headlines = [{"id": item.hid, "headline": item.text[:500]} for item in items]
+    async def _score_batch(
+        self, items: Sequence[NewsItem], recent_headlines: Sequence[str]
+    ) -> dict[int, ImportanceScore]:
+        payload = {
+            "recently_posted": [text[:120] for text in recent_headlines],
+            "headlines": [{"id": item.hid, "headline": item.text[:500]} for item in items],
+        }
         try:
             response = await self._client.messages.parse(
                 model=self._model,
                 max_tokens=60 * len(items) + 200,
                 system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": json.dumps(headlines, ensure_ascii=False)}],
+                messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                 output_format=_ScoredBatch,
                 # Simple classification: no extended thinking (saves output tokens).
                 thinking={"type": "disabled"},

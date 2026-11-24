@@ -7,6 +7,7 @@ independent, so you can swap the news source or the publisher later
 """
 
 import asyncio
+from collections import deque
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
@@ -27,6 +28,9 @@ from app.services.telegram import (
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# How many recently posted headlines Claude sees for duplicate detection.
+RECENT_HEADLINES = 30
 
 
 @dataclass
@@ -78,6 +82,9 @@ class NewsPoller:
         self._stopping = asyncio.Event()
         self._current_task: asyncio.Task[None] | None = None
         self.status = PollerStatus()
+        # Recently posted headlines, so Claude can spot repeats of the same story.
+        # In memory only: after a restart the first few repeats may slip through.
+        self._recent_posted: deque[str] = deque(maxlen=RECENT_HEADLINES)
 
     async def run_once(self) -> int:
         """Run one polling cycle and return how many items were posted.
@@ -157,6 +164,7 @@ class NewsPoller:
 
             posted += 1
             self.status.total_posted += 1
+            self._recent_posted.append(item.text)
             logger.info("Posted news hid=%s", item.hid)
             await self._pause(self._post_delay)
 
@@ -185,7 +193,7 @@ class NewsPoller:
                 logger.info("Waiting to score %d headlines in one batch", len(unscored))
                 unscored = []
             if unscored:
-                fresh = await self._scorer.score(unscored)
+                fresh = await self._scorer.score(unscored, list(self._recent_posted))
                 self._storage.save_scores(fresh)
                 scores.update(fresh)
             candidates = [i for i in candidates if i.hid in scores]

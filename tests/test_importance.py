@@ -73,3 +73,11 @@ async def test_refusal_or_truncation_is_an_error(make_item) -> None:  # type: ig
     scorer, _ = make_scorer(response([(1, 4, "oil")], stop_reason="max_tokens"))
     with pytest.raises(ImportanceScorerError):
         await scorer.score([make_item(1)])
+
+
+async def test_recent_headlines_are_included(make_item) -> None:  # type: ignore[no-untyped-def]
+    scorer, client = make_scorer(response([(1, 1, "oil")]))
+    await scorer.score([make_item(1, text="CRUDE OIL SURGES 5%")], ["OIL JUMPS 5%"])
+    content = client.messages.parse.call_args.kwargs["messages"][0]["content"]
+    assert '"recently_posted": ["OIL JUMPS 5%"]' in content
+    assert "CRUDE OIL SURGES 5%" in content

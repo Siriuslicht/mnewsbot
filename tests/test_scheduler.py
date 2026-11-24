@@ -156,9 +156,13 @@ class FakeScorer:
         self.scores = scores
         self.error = error
         self.calls: list[list[int]] = []
+        self.recent: list[list[str]] = []
 
-    async def score(self, items: list[NewsItem]) -> dict[int, ImportanceScore]:
+    async def score(
+        self, items: list[NewsItem], recent_headlines: list[str] = ()  # type: ignore[assignment]
+    ) -> dict[int, ImportanceScore]:
         self.calls.append([i.hid for i in items])
+        self.recent.append(list(recent_headlines))
         if self.error:
             raise self.error
         return {
@@ -376,3 +380,13 @@ async def test_lone_headline_is_scored_after_max_wait(storage: NewsStorage, make
     await poller.run_once()
     assert scorer.calls == [[1]]
     assert publisher.posted == [1]
+
+
+async def test_recent_posts_are_sent_for_duplicate_check(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    news = FakeNews([make_item(1, text="OIL JUMPS 5%")])
+    scorer = FakeScorer({1: 5, 2: 1})
+    poller = filtered_poller(news, FakePublisher(), storage, scorer)
+    await poller.run_once()
+    news.items.append(make_item(2, text="CRUDE OIL SURGES 5%"))
+    await poller.run_once()
+    assert scorer.recent == [[], ["OIL JUMPS 5%"]]

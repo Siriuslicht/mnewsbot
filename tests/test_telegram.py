@@ -47,9 +47,15 @@ def test_format_escapes_html(make_item) -> None:  # type: ignore[no-untyped-def]
     message = format_news_message(item)
     assert "S&amp;P &lt;500&gt; up" in message
     assert (
-        'Source: <a href="https://example.com/a?b=1&amp;c=&quot;2&quot;">'
-        'https://example.com/a?b=1&amp;c="2"</a>'
+        'Source: <a href="https://example.com/a?b=1&amp;c=&quot;2&quot;">https://example.com/...</a>'
     ) in message
+
+
+def test_source_shows_only_the_site(make_item) -> None:  # type: ignore[no-untyped-def]
+    message = format_news_message(make_item(1, link="https://x.com/DeItaone/status/2125215045726638437"))
+    assert message.endswith(
+        'Source: <a href="https://x.com/DeItaone/status/2125215045726638437">https://x.com/...</a>'
+    )
 
 
 def test_format_uses_uzbek_translation(make_item) -> None:  # type: ignore[no-untyped-def]
