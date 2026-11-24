@@ -90,10 +90,12 @@ class Translator:
         try:
             response = await self._client.messages.parse(
                 model=self._model,
-                max_tokens=400 * len(items) + 500,
+                max_tokens=300 * len(items) + 200,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                 output_format=_TranslatedBatch,
+                # Thinking off: translation doesn't need it and it tripled output tokens.
+                thinking={"type": "disabled"},
                 output_config={"effort": "low"},
             )
         except anthropic.APIError as exc:

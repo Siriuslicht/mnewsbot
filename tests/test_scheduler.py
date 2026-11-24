@@ -143,7 +143,7 @@ async def test_scheduler_prevents_overlap(storage: NewsStorage) -> None:
 
 # ---- source exclusion, importance filter, daily cap -------------------------
 
-from datetime import datetime  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
 from app.services.importance import ImportanceScore, ImportanceScorerError  # noqa: E402
@@ -333,3 +333,46 @@ async def test_untranslated_item_waits_for_next_cycle(storage: NewsStorage, make
     await poller.run_once()
     assert publisher.posted == [1]
     assert storage.filter_new([2]) == {2}
+
+
+# ---- scoring in batches (cost saving) ------------------------------------------
+
+
+async def test_fresh_headlines_wait_for_a_batch(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    now = datetime(2026, 11, 24, 12, tzinfo=TASHKENT)
+    fresh = now.timestamp() - 60  # published a minute ago
+    news = FakeNews([make_item(1, ts=fresh), make_item(2, ts=fresh + 1)])
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 5, 2: 5, 3: 5})
+    clock = {"now": now}
+    poller = NewsPoller(
+        news, publisher, storage, post_delay=0, initial_sync=False, scorer=scorer,
+        score_batch_size=3, score_max_wait=300, timezone=TASHKENT, clock=lambda: clock["now"],
+    )
+
+    assert await poller.run_once() == 0  # 2 waiting, batch of 3 not full yet
+    assert scorer.calls == []
+    assert storage.filter_new([1, 2]) == {1, 2}  # kept, not dropped
+
+    news.items.append(make_item(3, ts=fresh + 2))
+    assert await poller.run_once() == 3  # batch full -> one call for all three
+    assert scorer.calls == [[1, 2, 3]]
+
+
+async def test_lone_headline_is_scored_after_max_wait(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    now = datetime(2026, 11, 24, 12, tzinfo=TASHKENT)
+    news = FakeNews([make_item(1, ts=now.timestamp() - 60)])
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 4})
+    clock = {"now": now}
+    poller = NewsPoller(
+        news, publisher, storage, post_delay=0, initial_sync=False, scorer=scorer,
+        score_batch_size=20, score_max_wait=300, timezone=TASHKENT, clock=lambda: clock["now"],
+    )
+    await poller.run_once()
+    assert scorer.calls == []
+
+    clock["now"] = now + timedelta(minutes=5)  # now 6 minutes old
+    await poller.run_once()
+    assert scorer.calls == [[1]]
+    assert publisher.posted == [1]

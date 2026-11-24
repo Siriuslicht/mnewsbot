@@ -98,11 +98,13 @@ class ImportanceScorer:
         try:
             response = await self._client.messages.parse(
                 model=self._model,
-                max_tokens=2048,
+                max_tokens=60 * len(items) + 200,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": json.dumps(headlines, ensure_ascii=False)}],
                 output_format=_ScoredBatch,
-                output_config={"effort": "low"},  # simple classification
+                # Simple classification: no extended thinking (saves output tokens).
+                thinking={"type": "disabled"},
+                output_config={"effort": "low"},
             )
         except anthropic.APIError as exc:
             raise ImportanceScorerError(f"{type(exc).__name__}: {exc}") from exc

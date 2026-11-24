@@ -50,6 +50,8 @@ class NewsPoller:
         excluded_accounts: Collection[str] = (),
         scorer: ImportanceScorer | None = None,
         translator: Translator | None = None,
+        score_batch_size: int = 20,
+        score_max_wait: float = 0,
         min_importance: int = 4,
         daily_cap: int = 200,
         burst: int = 10,
@@ -64,6 +66,10 @@ class NewsPoller:
         self._excluded_accounts = excluded_accounts
         self._scorer = scorer  # None = post every non-excluded item (still capped)
         self._translator = translator  # None = post the original English text
+        # Score when this many headlines are waiting, or when the oldest one
+        # was published score_max_wait seconds ago (0 = score immediately).
+        self._score_batch_size = score_batch_size
+        self._score_max_wait = score_max_wait
         self._min_importance = min_importance
         self._daily_cap = daily_cap
         self._burst = burst
@@ -173,6 +179,11 @@ class NewsPoller:
         if self._scorer is not None and candidates:
             scores = self._storage.get_scores(i.hid for i in candidates)
             unscored = [i for i in candidates if i.hid not in scores]
+            if unscored and not self._batch_ready(unscored):
+                # Cost saving: wait until enough headlines pile up (or the
+                # oldest has waited long enough) and score them in one call.
+                logger.info("Waiting to score %d headlines in one batch", len(unscored))
+                unscored = []
             if unscored:
                 fresh = await self._scorer.score(unscored)
                 self._storage.save_scores(fresh)
@@ -191,6 +202,12 @@ class NewsPoller:
                 "Will post hid=%s%s", item.hid, f" score={s.score} ({s.category})" if s else ""
             )
         return chosen
+
+    def _batch_ready(self, unscored: list[NewsItem]) -> bool:
+        if len(unscored) >= self._score_batch_size:
+            return True
+        oldest = min(item.published_at for item in unscored)
+        return (self._clock() - oldest).total_seconds() >= self._score_max_wait
 
     def _apply_budget(
         self, items: list[NewsItem], scores: dict[int, ImportanceScore]

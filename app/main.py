@@ -106,6 +106,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             excluded_accounts=settings.excluded_accounts,
             scorer=scorer,
             translator=translator,
+            score_batch_size=settings.score_batch_size,
+            score_max_wait=settings.score_max_wait,
             min_importance=settings.min_importance,
             daily_cap=settings.daily_post_cap,
             burst=settings.post_burst,
