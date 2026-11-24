@@ -40,11 +40,6 @@ T = TypeVar("T")
 
 # Telegram rejects messages longer than 4096 characters.
 MAX_MESSAGE_LENGTH = 4096
-
-# Footer: "Source: Finbrok.uz", where only "Finbrok" is the (blue) link.
-SOURCE_LINK_TEXT = "Finbrok"
-SOURCE_SUFFIX = ".uz"
-
 # BadRequest texts that mean "the channel is misconfigured", not "this message is bad".
 _CONFIG_ERROR_HINTS = (
     "chat not found",
@@ -101,10 +96,10 @@ def _build_message(item: NewsItem, text_limit: int) -> str:
     else:
         lines.append(escape(_shorten(item.text, text_limit), quote=False))
 
-    # The original URL stays hidden behind the blue "Finbrok" link text.
+    # "Source: https://x.com/..." showing the original article's URL.
     if item.link and _is_safe_url(item.link):
         href = escape(item.link, quote=True)
-        lines += ["", f'Source: <a href="{href}">{SOURCE_LINK_TEXT}</a>{SOURCE_SUFFIX}']
+        lines += ["", f'Source: <a href="{href}">{escape(item.link, quote=False)}</a>']
 
     return "\n".join(lines)
 

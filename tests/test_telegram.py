@@ -46,7 +46,10 @@ def test_format_escapes_html(make_item) -> None:  # type: ignore[no-untyped-def]
     item = make_item(1, text="S&P <500> up", link="https://example.com/a?b=1&c=\"2\"")
     message = format_news_message(item)
     assert "S&amp;P &lt;500&gt; up" in message
-    assert 'Source: <a href="https://example.com/a?b=1&amp;c=&quot;2&quot;">Finbrok</a>.uz' in message
+    assert (
+        'Source: <a href="https://example.com/a?b=1&amp;c=&quot;2&quot;">'
+        'https://example.com/a?b=1&amp;c="2"</a>'
+    ) in message
 
 
 def test_format_uses_uzbek_translation(make_item) -> None:  # type: ignore[no-untyped-def]
