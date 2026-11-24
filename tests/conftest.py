@@ -9,6 +9,8 @@ os.environ.update(
     CHANNEL_ID="@test_channel",
     ENVIRONMENT="development",
     PTB_TIMEDELTA="true",
+    IMPORTANCE_FILTER="false",
+    TRANSLATE_UZ="false",
 )
 
 from collections.abc import Callable  # noqa: E402

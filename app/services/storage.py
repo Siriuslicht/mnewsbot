@@ -1,12 +1,14 @@
 """Duplicate-prevention storage backed by the processed_news table."""
 
 from collections.abc import Iterable
+from datetime import UTC, datetime
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from app.database.models import ProcessedNews
+from app.database.models import NewsScore, ProcessedNews
+from app.services.importance import ImportanceScore
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,6 +51,50 @@ class NewsStorage:
                 # Already stored. Harmless: the unique constraint did its job.
                 session.rollback()
                 logger.debug("hid=%s already marked as processed", hid)
+
+    # ---- importance scores and the daily cap ------------------------------
+
+    def get_scores(self, hids: Iterable[int]) -> dict[int, ImportanceScore]:
+        """Scores already stored for these hids (items scored in an earlier cycle)."""
+        hids = set(hids)
+        if not hids:
+            return {}
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(NewsScore).where(NewsScore.hid.in_(hids), NewsScore.score.is_not(None))
+            ).all()
+        return {row.hid: ImportanceScore(row.score, row.category or "other") for row in rows}
+
+    def save_scores(self, scores: dict[int, ImportanceScore]) -> None:
+        if not scores:
+            return
+        with self._session_factory() as session:
+            existing = set(
+                session.scalars(select(NewsScore.hid).where(NewsScore.hid.in_(scores))).all()
+            )
+            session.add_all(
+                NewsScore(hid=hid, score=s.score, category=s.category)
+                for hid, s in sorted(scores.items())
+                if hid not in existing
+            )
+            session.commit()
+
+    def mark_posted(self, hid: int) -> None:
+        """Record the post time; this is what the daily cap counts."""
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            row = session.scalar(select(NewsScore).where(NewsScore.hid == hid))
+            if row is None:
+                session.add(NewsScore(hid=hid, posted_at=now))
+            else:
+                row.posted_at = now
+            session.commit()
+
+    def count_posted_since(self, since: datetime) -> int:
+        with self._session_factory() as session:
+            return session.scalar(
+                select(func.count()).select_from(NewsScore).where(NewsScore.posted_at >= since)
+            ) or 0
 
     def mark_many(self, hids: Iterable[int]) -> int:
         """Record many hids in one transaction (initial sync). Returns how many were new."""

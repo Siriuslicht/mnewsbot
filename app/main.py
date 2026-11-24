@@ -7,6 +7,7 @@ everything down in the right order. HTTP endpoints exist for monitoring only.
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -14,9 +15,11 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database.database import create_db_engine, create_session_factory, init_db, ping_db
 from app.scheduler import NewsPoller, create_scheduler
+from app.services.importance import ImportanceScorer
 from app.services.marketnews import MarketNewsClient
 from app.services.storage import NewsStorage
 from app.services.telegram import TelegramPublisher
+from app.services.translator import Translator
 from app.utils.lock import SingleInstanceLock
 from app.utils.logger import get_logger, setup_logging
 
@@ -27,7 +30,10 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     token = settings.bot_token.get_secret_value()
-    setup_logging(settings.log_level, settings.log_format, settings.log_file, secrets=[token])
+    claude_key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else ""
+    setup_logging(
+        settings.log_level, settings.log_format, settings.log_file, secrets=[token, claude_key]
+    )
     logger.info("Starting in %s mode", settings.environment)
 
     # AsyncExitStack runs every registered cleanup in reverse order, even if
@@ -64,8 +70,46 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Fail fast on a bad token or missing channel permissions.
         await publisher.start()
 
+        scorer = None
+        if settings.importance_filter and settings.anthropic_api_key:
+            scorer = ImportanceScorer(
+                settings.anthropic_api_key.get_secret_value(),
+                settings.claude_model,
+                settings.claude_timeout,
+            )
+            stack.push_async_callback(scorer.close)
+            logger.info(
+                "Importance filter on: %s, min score %d, cap %d/day",
+                settings.claude_model, settings.min_importance, settings.daily_post_cap,
+            )
+        else:
+            logger.warning("Importance filter OFF: every non-excluded item is posted (still capped)")
+
+        translator = None
+        if settings.translate_uz and settings.anthropic_api_key:
+            translator = Translator(
+                settings.anthropic_api_key.get_secret_value(),
+                settings.claude_model,
+                settings.claude_timeout,
+            )
+            stack.push_async_callback(translator.close)
+            logger.info("Uzbek translation on: %s", settings.claude_model)
+        else:
+            logger.warning("Uzbek translation OFF: posts stay in English")
+
         poller = NewsPoller(
-            news_client, publisher, storage, settings.post_delay, settings.initial_sync_mode
+            news_client,
+            publisher,
+            storage,
+            settings.post_delay,
+            settings.initial_sync_mode,
+            excluded_accounts=settings.excluded_accounts,
+            scorer=scorer,
+            translator=translator,
+            min_importance=settings.min_importance,
+            daily_cap=settings.daily_post_cap,
+            burst=settings.post_burst,
+            timezone=ZoneInfo(settings.bot_timezone),
         )
         scheduler = create_scheduler(poller, settings.poll_interval)
         scheduler.start()

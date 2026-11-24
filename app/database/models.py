@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer
+from sqlalchemy import BigInteger, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.database import Base
@@ -26,4 +26,29 @@ class ProcessedNews(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+    )
+
+
+class NewsScore(Base):
+    """Claude's importance score for a news item, plus when it was posted.
+
+    Stored so an item is never scored twice (e.g. when Telegram is down and the
+    post is retried), and `posted_at` drives the daily post cap. A separate
+    table, so existing databases need no migration: create_all adds it.
+    """
+
+    __tablename__ = "news_scores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hid: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    # NULL when the item was posted without scoring (IMPORTANCE_FILTER=false).
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    scored_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    posted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
     )

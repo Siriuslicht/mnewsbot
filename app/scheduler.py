@@ -1,4 +1,5 @@
-"""The polling job: fetch -> filter duplicates -> post -> remember.
+"""The polling job: fetch -> filter duplicates -> exclude sources -> score
+importance -> apply the daily cap -> translate -> post -> remember.
 
 This is the only place that combines the three services. Each service stays
 independent, so you can swap the news source or the publisher later
@@ -6,13 +7,17 @@ independent, so you can swap the news source or the publisher later
 """
 
 import asyncio
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.services.filters import day_start, is_excluded_source, paced_allowance
+from app.services.importance import ImportanceScore, ImportanceScorer, ImportanceScorerError
 from app.services.marketnews import MarketNewsClient, MarketNewsError, NewsItem
+from app.services.translator import Translator, TranslatorError
 from app.services.storage import NewsStorage
 from app.services.telegram import (
     MessageRejectedError,
@@ -41,12 +46,29 @@ class NewsPoller:
         storage: NewsStorage,
         post_delay: float = 3.0,
         initial_sync: bool = True,
+        *,
+        excluded_accounts: Collection[str] = (),
+        scorer: ImportanceScorer | None = None,
+        translator: Translator | None = None,
+        min_importance: int = 4,
+        daily_cap: int = 200,
+        burst: int = 10,
+        timezone: tzinfo = UTC,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._news_client = news_client
         self._publisher = publisher
         self._storage = storage
         self._post_delay = post_delay
         self._initial_sync = initial_sync
+        self._excluded_accounts = excluded_accounts
+        self._scorer = scorer  # None = post every non-excluded item (still capped)
+        self._translator = translator  # None = post the original English text
+        self._min_importance = min_importance
+        self._daily_cap = daily_cap
+        self._burst = burst
+        self._timezone = timezone
+        self._clock = clock  # injectable so tests can pick the time of day
         self._stopping = asyncio.Event()
         self._current_task: asyncio.Task[None] | None = None
         self.status = PollerStatus()
@@ -74,14 +96,38 @@ class NewsPoller:
             return self._succeed(0)
         logger.info("Found %d new articles", len(new_items))
 
+        try:
+            to_post = await self._select(new_items)
+        except ImportanceScorerError as exc:
+            # Items stay unprocessed and are scored again on the next poll.
+            return self._fail(f"Importance scoring failed: {exc}")
+        except SQLAlchemyError:
+            logger.exception("Database error while filtering news")
+            return self._fail("database error")
+
+        if self._translator is not None and to_post:
+            try:
+                translations = await self._translator.translate(to_post)
+            except TranslatorError as exc:
+                # Never post untranslated: the items stay unprocessed and are
+                # translated and posted on the next poll.
+                return self._fail(f"Translation failed: {exc}")
+            to_post = [
+                item.model_copy(update={"title_uz": t.title, "description_uz": t.description})
+                for item in to_post
+                if (t := translations.get(item.hid))
+            ]
+
         posted = 0
-        for item in new_items:
+        for item in to_post:
             if self._stopping.is_set():
-                logger.info("Shutdown requested, %d items left for next start", len(new_items) - posted)
+                logger.info("Shutdown requested, %d items left for next start", len(to_post) - posted)
                 break
 
+            delivered = False
             try:
                 await self._publisher.publish_news(item)
+                delivered = True
             except MessageRejectedError as exc:
                 # Telegram will never accept this message. Record it anyway,
                 # otherwise it would block every later item forever.
@@ -94,6 +140,8 @@ class NewsPoller:
             # Save only AFTER Telegram accepted (or permanently rejected) it,
             # so transient failures get retried.
             try:
+                if delivered:
+                    self._storage.mark_posted(item.hid)
                 self._storage.mark_processed(item.hid)
             except SQLAlchemyError:
                 # The post went out but wasn't recorded; it may be re-posted
@@ -107,6 +155,76 @@ class NewsPoller:
             await self._pause(self._post_delay)
 
         return self._succeed(posted)
+
+    async def _select(self, items: list[NewsItem]) -> list[NewsItem]:
+        """Decide which new items to post, oldest first.
+
+        Excluded, low-importance and over-budget items are recorded as
+        processed so they are never looked at again. Items Claude has not
+        scored yet stay unprocessed and are retried on the next poll.
+        """
+        excluded = [i for i in items if is_excluded_source(i.link, self._excluded_accounts)]
+        if excluded:
+            self._storage.mark_many(i.hid for i in excluded)
+            logger.info("Excluded %d items from blocked X accounts", len(excluded))
+        candidates = [i for i in items if i not in excluded]
+
+        scores: dict[int, ImportanceScore] = {}
+        if self._scorer is not None and candidates:
+            scores = self._storage.get_scores(i.hid for i in candidates)
+            unscored = [i for i in candidates if i.hid not in scores]
+            if unscored:
+                fresh = await self._scorer.score(unscored)
+                self._storage.save_scores(fresh)
+                scores.update(fresh)
+            candidates = [i for i in candidates if i.hid in scores]
+            low = [i for i in candidates if scores[i.hid].score < self._min_importance]
+            if low:
+                self._storage.mark_many(i.hid for i in low)
+                logger.info("Skipped %d items below importance %d", len(low), self._min_importance)
+            candidates = [i for i in candidates if i not in low]
+
+        chosen = self._apply_budget(candidates, scores)
+        for item in chosen:
+            s = scores.get(item.hid)
+            logger.info(
+                "Will post hid=%s%s", item.hid, f" score={s.score} ({s.category})" if s else ""
+            )
+        return chosen
+
+    def _apply_budget(
+        self, items: list[NewsItem], scores: dict[int, ImportanceScore]
+    ) -> list[NewsItem]:
+        """Keep the most important items that fit today's cap and pacing.
+
+        Score-5 (breaking) items ignore pacing so they are never held back by
+        a quiet morning; they still respect the hard daily cap.
+        """
+        now_local = self._clock().astimezone(self._timezone)
+        posted_today = self._storage.count_posted_since(day_start(now_local).astimezone(UTC))
+        cap_left = max(self._daily_cap - posted_today, 0)
+        paced_left = max(paced_allowance(now_local, self._daily_cap, self._burst) - posted_today, 0)
+
+        def score_of(item: NewsItem) -> int:
+            return scores[item.hid].score if item.hid in scores else 0
+
+        # Highest score first; among equal scores the newest wins.
+        ranked = sorted(items, key=lambda i: (score_of(i), i.ts), reverse=True)
+        keep: set[int] = set()
+        for item in ranked:
+            if len(keep) >= cap_left:
+                break
+            if score_of(item) >= 5 or len(keep) < paced_left:
+                keep.add(item.hid)
+
+        dropped = [i for i in items if i.hid not in keep]
+        if dropped:
+            self._storage.mark_many(i.hid for i in dropped)
+            logger.info(
+                "Daily budget: skipped %d items (%d posted today, cap %d)",
+                len(dropped), posted_today, self._daily_cap,
+            )
+        return [i for i in items if i.hid in keep]
 
     def _seed(self, items: list[NewsItem]) -> int:
         """First run: remember the current batch WITHOUT posting it."""

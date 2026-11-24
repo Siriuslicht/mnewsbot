@@ -41,6 +41,10 @@ T = TypeVar("T")
 # Telegram rejects messages longer than 4096 characters.
 MAX_MESSAGE_LENGTH = 4096
 
+# Footer: "Source: Finbrok.uz", where only "Finbrok" is the (blue) link.
+SOURCE_LINK_TEXT = "Finbrok"
+SOURCE_SUFFIX = ".uz"
+
 # BadRequest texts that mean "the channel is misconfigured", not "this message is bad".
 _CONFIG_ERROR_HINTS = (
     "chat not found",
@@ -83,23 +87,24 @@ def format_news_message(item: NewsItem) -> str:
         text_limit -= max(len(message) - MAX_MESSAGE_LENGTH, 50)
 
 
+def _shorten(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: max(limit - 1, 0)].rstrip() + "…"
+
+
 def _build_message(item: NewsItem, text_limit: int) -> str:
-    text = item.text
-    if len(text) > text_limit:
-        text = text[: max(text_limit - 1, 0)].rstrip() + "…"
+    lines = ["📰 <b>Market News</b>", ""]
+    if item.title_uz:
+        # Uzbek translation: bold headline, then the short description.
+        lines.append(f"<b>{escape(_shorten(item.title_uz, text_limit), quote=False)}</b>")
+        if item.description_uz:
+            lines.append(escape(_shorten(item.description_uz, text_limit), quote=False))
+    else:
+        lines.append(escape(_shorten(item.text, text_limit), quote=False))
 
-    lines = ["📰 <b>Market News</b>", "", escape(text, quote=False)]
-
-    details = []
-    if item.cat:
-        details.append(f"Category: {escape(item.cat, quote=False)}")
-    if item.dir:
-        details.append(f"Direction: {escape(item.dir.capitalize(), quote=False)}")
-    if details:
-        lines += ["", *details]
-
+    # The original URL stays hidden behind the blue "Finbrok" link text.
     if item.link and _is_safe_url(item.link):
-        lines += ["", "Source:", escape(item.link, quote=False)]
+        href = escape(item.link, quote=True)
+        lines += ["", f'Source: <a href="{href}">{SOURCE_LINK_TEXT}</a>{SOURCE_SUFFIX}']
 
     return "\n".join(lines)
 

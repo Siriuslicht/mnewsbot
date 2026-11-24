@@ -43,12 +43,25 @@ def make_publisher(bot: AsyncMock, **kwargs: object) -> tuple[TelegramPublisher,
 
 
 def test_format_escapes_html(make_item) -> None:  # type: ignore[no-untyped-def]
-    item = make_item(1, text="S&P <500> up", cat="A&B")
+    item = make_item(1, text="S&P <500> up", link="https://example.com/a?b=1&c=\"2\"")
     message = format_news_message(item)
     assert "S&amp;P &lt;500&gt; up" in message
-    assert "Category: A&amp;B" in message
-    assert "Direction: Bull" in message
-    assert "https://example.com/1" in message
+    assert 'Source: <a href="https://example.com/a?b=1&amp;c=&quot;2&quot;">Finbrok</a>.uz' in message
+
+
+def test_format_uses_uzbek_translation(make_item) -> None:  # type: ignore[no-untyped-def]
+    item = make_item(1, text="BITCOIN FALLS").model_copy(
+        update={"title_uz": "Bitcoin <tushdi>", "description_uz": "Narx 60 000 dollar"}
+    )
+    message = format_news_message(item)
+    assert "<b>Bitcoin &lt;tushdi&gt;</b>\nNarx 60 000 dollar" in message
+    assert "BITCOIN FALLS" not in message
+
+
+def test_format_has_no_category_or_direction(make_item) -> None:  # type: ignore[no-untyped-def]
+    message = format_news_message(make_item(1, cat="STOCKS", dir="bull"))
+    assert "Category" not in message
+    assert "Direction" not in message
 
 
 def test_format_drops_unsafe_links(make_item) -> None:  # type: ignore[no-untyped-def]

@@ -30,6 +30,9 @@ class NewsItem(BaseModel):
     chan: str | None = None
     dir: str | None = None
     cat: str | None = None
+    # Filled in by the translator, never by the API.
+    title_uz: str | None = Field(None, exclude=True)
+    description_uz: str | None = Field(None, exclude=True)
 
     @property
     def published_at(self) -> datetime:

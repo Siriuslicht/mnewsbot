@@ -3,8 +3,9 @@
 import re
 from functools import lru_cache
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Telegram bot tokens look like "123456789:AAH...". Used for validation and log redaction.
@@ -54,6 +55,26 @@ class Settings(BaseSettings):
     )
     http_timeout: float = Field(10.0, alias="HTTP_TIMEOUT", gt=0)
 
+    # X (Twitter) accounts whose items are never posted, comma-separated and
+    # case-insensitive. Matched against links like https://x.com/<account>/...
+    excluded_x_accounts: str = Field("FirstSquawk,MarketNews_Feed", alias="EXCLUDED_X_ACCOUNTS")
+
+    # Importance filter: Claude scores each new headline 1-5 and only items
+    # scoring >= MIN_IMPORTANCE are posted, at most DAILY_POST_CAP per day.
+    importance_filter: bool = Field(True, alias="IMPORTANCE_FILTER")
+    # Translate posts into Uzbek (Latin script) with Claude.
+    translate_uz: bool = Field(True, alias="TRANSLATE_UZ")
+    anthropic_api_key: SecretStr | None = Field(None, alias="ANTHROPIC_API_KEY")
+    claude_model: str = Field("claude-haiku-5-5", alias="CLAUDE_MODEL")
+    claude_timeout: float = Field(30.0, alias="CLAUDE_TIMEOUT", gt=0)
+    min_importance: int = Field(4, alias="MIN_IMPORTANCE", ge=1, le=5)
+    daily_post_cap: int = Field(200, alias="DAILY_POST_CAP", ge=1)
+    # Posts are spread over the day: by 12:00 at most ~half the cap is used.
+    # POST_BURST lets this many extra posts through when a lot happens at once.
+    post_burst: int = Field(10, alias="POST_BURST", ge=0)
+    # The daily cap resets at midnight in this timezone.
+    bot_timezone: str = Field("Asia/Tashkent", alias="BOT_TIMEZONE")
+
     # Pause between consecutive Telegram posts. Telegram limits bots to roughly
     # 20 messages per minute in a single channel.
     post_delay: float = Field(3.0, alias="POST_DELAY", ge=0)
@@ -89,6 +110,33 @@ class Settings(BaseSettings):
         raise ValueError(
             "CHANNEL_ID must be '@channel_username' or a numeric id like -1001234567890"
         )
+
+    @property
+    def excluded_accounts(self) -> frozenset[str]:
+        return frozenset(
+            name.strip().lstrip("@").lower()
+            for name in self.excluded_x_accounts.split(",")
+            if name.strip()
+        )
+
+    @field_validator("bot_timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"BOT_TIMEZONE '{value}' is not a valid timezone name") from None
+        return value
+
+    @model_validator(mode="after")
+    def _require_claude_key(self) -> "Settings":
+        # Fail at startup rather than silently posting every item unfiltered.
+        if (self.importance_filter or self.translate_uz) and not self.anthropic_api_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY is required while IMPORTANCE_FILTER=true or TRANSLATE_UZ=true "
+                "(set both to false to post every item unfiltered, in English)"
+            )
+        return self
 
     @field_validator("log_level", mode="before")
     @classmethod

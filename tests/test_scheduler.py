@@ -139,3 +139,197 @@ async def test_scheduler_prevents_overlap(storage: NewsStorage) -> None:
     job = create_scheduler(poller, 30).get_job("poll_market_news")
     assert job.max_instances == 1
     assert job.coalesce is True
+
+
+# ---- source exclusion, importance filter, daily cap -------------------------
+
+from datetime import datetime  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+from app.services.importance import ImportanceScore, ImportanceScorerError  # noqa: E402
+
+TASHKENT = ZoneInfo("Asia/Tashkent")
+
+
+class FakeScorer:
+    def __init__(self, scores: dict[int, int], error: Exception | None = None) -> None:
+        self.scores = scores
+        self.error = error
+        self.calls: list[list[int]] = []
+
+    async def score(self, items: list[NewsItem]) -> dict[int, ImportanceScore]:
+        self.calls.append([i.hid for i in items])
+        if self.error:
+            raise self.error
+        return {
+            i.hid: ImportanceScore(self.scores[i.hid], "macro") for i in items if i.hid in self.scores
+        }
+
+
+def filtered_poller(news, publisher, storage, scorer=None, hour=12, **kwargs) -> NewsPoller:  # type: ignore[no-untyped-def]
+    now = datetime(2026, 11, 24, hour, tzinfo=TASHKENT)
+    return NewsPoller(
+        news, publisher, storage, post_delay=0, initial_sync=False,
+        excluded_accounts=frozenset({"firstsquawk", "marketnews_feed"}),
+        scorer=scorer, timezone=TASHKENT, clock=lambda: now, **kwargs,
+    )
+
+
+async def test_blocked_x_accounts_are_never_posted(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    items = [
+        make_item(1, link="https://x.com/FirstSquawk/status/2124955452278796607"),
+        make_item(2, link="https://x.com/MarketNews_Feed"),
+        make_item(3, link="https://x.com/DeItaone/status/5"),
+    ]
+    publisher = FakePublisher()
+    scorer = FakeScorer({3: 5})
+    await filtered_poller(FakeNews(items), publisher, storage, scorer).run_once()
+    assert publisher.posted == [3]
+    assert scorer.calls == [[3]]  # blocked items are not even sent to Claude
+    assert storage.filter_new([1, 2]) == set()
+
+
+async def test_only_important_items_are_posted(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 2, 2: 4, 3: 5, 4: 3})
+    poller = filtered_poller(FakeNews([make_item(i) for i in (1, 2, 3, 4)]), publisher, storage, scorer)
+    assert await poller.run_once() == 2
+    assert publisher.posted == [2, 3]  # still oldest first
+    assert storage.filter_new([1, 2, 3, 4]) == set()  # low scores are never re-scored
+
+
+async def test_threshold_is_configurable(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 3, 2: 4})
+    poller = filtered_poller(
+        FakeNews([make_item(1), make_item(2)]), publisher, storage, scorer, min_importance=3
+    )
+    await poller.run_once()
+    assert publisher.posted == [1, 2]
+
+
+async def test_scoring_failure_keeps_items_for_next_cycle(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 5}, error=ImportanceScorerError("rate limited"))
+    poller = filtered_poller(FakeNews([make_item(1)]), publisher, storage, scorer)
+    assert await poller.run_once() == 0
+    assert "Importance scoring failed" in (poller.status.last_error or "")
+    assert storage.filter_new([1]) == {1}
+
+    scorer.error = None
+    assert await poller.run_once() == 1
+    assert publisher.posted == [1]
+
+
+async def test_scores_are_stored_and_not_rescored(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher(failures={1: TelegramUnavailableError("down")})
+    scorer = FakeScorer({1: 5})
+    poller = filtered_poller(FakeNews([make_item(1)]), publisher, storage, scorer)
+    await poller.run_once()  # scored, but Telegram failed
+    publisher.failures.clear()
+    await poller.run_once()  # posted using the stored score
+    assert publisher.posted == [1]
+    assert scorer.calls == [[1]]
+    assert storage.get_scores([1]) == {1: ImportanceScore(5, "macro")}
+
+
+async def test_daily_cap_is_never_exceeded(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    items = [make_item(i) for i in range(1, 8)]
+    scorer = FakeScorer({i: 5 for i in range(1, 8)})
+    poller = filtered_poller(FakeNews(items), publisher, storage, scorer, hour=23, daily_cap=5)
+    assert await poller.run_once() == 5
+    assert publisher.posted == [3, 4, 5, 6, 7]  # the newest of equally important items
+    assert storage.filter_new(range(1, 8)) == set()  # the rest are dropped, not queued
+
+
+async def test_pacing_prefers_higher_scores(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 4, 2: 5, 3: 4, 4: 4})
+    # 00:00 -> pacing allows only the burst (2 posts); the best ones win.
+    poller = filtered_poller(
+        FakeNews([make_item(i) for i in (1, 2, 3, 4)]), publisher, storage, scorer,
+        hour=0, burst=2,
+    )
+    await poller.run_once()
+    assert publisher.posted == [2, 4]  # the score-5 item + the newest score-4 item
+
+
+async def test_breaking_news_skips_pacing(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 5, 2: 5, 3: 4})
+    poller = filtered_poller(
+        FakeNews([make_item(i) for i in (1, 2, 3)]), publisher, storage, scorer,
+        hour=0, burst=0,
+    )
+    await poller.run_once()
+    assert publisher.posted == [1, 2]  # score 5 posts even with no pacing allowance left
+
+
+# ---- Uzbek translation --------------------------------------------------------
+
+from app.services.translator import Translation, TranslatorError  # noqa: E402
+
+
+class FakeTranslator:
+    def __init__(self, error: Exception | None = None, skip: set[int] | None = None) -> None:
+        self.error = error
+        self.skip = skip or set()
+        self.calls: list[list[int]] = []
+
+    async def translate(self, items: list[NewsItem]) -> dict[int, Translation]:
+        self.calls.append([i.hid for i in items])
+        if self.error:
+            raise self.error
+        return {i.hid: Translation(f"Sarlavha {i.hid}", "Tavsif") for i in items if i.hid not in self.skip}
+
+
+class RecordingPublisher(FakePublisher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.items: list[NewsItem] = []
+
+    async def publish_news(self, item: NewsItem) -> None:
+        self.items.append(item)
+        await super().publish_news(item)
+
+
+async def test_only_filtered_items_are_translated(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = RecordingPublisher()
+    translator = FakeTranslator()
+    poller = filtered_poller(
+        FakeNews([make_item(1), make_item(2)]), publisher, storage,
+        FakeScorer({1: 2, 2: 5}), translator=translator,
+    )
+    await poller.run_once()
+    assert translator.calls == [[2]]  # the low-score item is never translated
+    assert publisher.items[0].title_uz == "Sarlavha 2"
+    assert publisher.items[0].description_uz == "Tavsif"
+
+
+async def test_translation_failure_posts_later(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    translator = FakeTranslator(error=TranslatorError("timeout"))
+    poller = filtered_poller(
+        FakeNews([make_item(1)]), publisher, storage, FakeScorer({1: 5}), translator=translator
+    )
+    assert await poller.run_once() == 0
+    assert publisher.posted == []  # never posted untranslated
+    assert "Translation failed" in (poller.status.last_error or "")
+    assert storage.filter_new([1]) == {1}
+
+    translator.error = None
+    assert await poller.run_once() == 1
+    assert publisher.posted == [1]
+
+
+async def test_untranslated_item_waits_for_next_cycle(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    publisher = FakePublisher()
+    translator = FakeTranslator(skip={2})
+    poller = filtered_poller(
+        FakeNews([make_item(1), make_item(2)]), publisher, storage,
+        FakeScorer({1: 5, 2: 5}), translator=translator,
+    )
+    await poller.run_once()
+    assert publisher.posted == [1]
+    assert storage.filter_new([2]) == {2}

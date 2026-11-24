@@ -62,3 +62,25 @@ def test_logs_redact_bot_token() -> None:
     line = formatter.format(record)
     assert TOKEN not in line
     assert "***" in line
+
+
+def test_filter_requires_claude_key() -> None:
+    with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY"):
+        make_settings(IMPORTANCE_FILTER="true")
+    settings = make_settings(IMPORTANCE_FILTER="true", ANTHROPIC_API_KEY="test-key")
+    assert settings.daily_post_cap == 200 and settings.min_importance == 4
+
+
+def test_excluded_accounts_are_normalised() -> None:
+    settings = make_settings(EXCLUDED_X_ACCOUNTS=" @FirstSquawk , MarketNews_Feed,")
+    assert settings.excluded_accounts == {"firstsquawk", "marketnews_feed"}
+
+
+def test_invalid_timezone_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(BOT_TIMEZONE="Mars/Olympus")
+
+
+def test_claude_key_is_redacted_from_logs() -> None:
+    record = logging.LogRecord("x", logging.ERROR, "", 0, "key=sk-ant-secret-123", None, None)
+    assert "sk-ant-secret-123" not in TextFormatter(Redactor(["sk-ant-secret-123"])).format(record)
