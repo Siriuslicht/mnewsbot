@@ -104,6 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.post_delay,
             settings.initial_sync_mode,
             excluded_accounts=settings.excluded_accounts,
+            priority_accounts=settings.priority_accounts,
             scorer=scorer,
             translator=translator,
             score_batch_size=settings.score_batch_size,
@@ -113,6 +114,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             burst=settings.post_burst,
             timezone=ZoneInfo(settings.bot_timezone),
         )
+        if settings.priority_accounts:
+            logger.info(
+                "Priority X accounts (posted instantly): %s",
+                ", ".join(sorted(settings.priority_accounts)),
+            )
         scheduler = create_scheduler(poller, settings.poll_interval)
         scheduler.start()
         app.state.poller = poller

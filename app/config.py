@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # X (Twitter) accounts whose items are never posted, comma-separated and
     # case-insensitive. Matched against links like https://x.com/<account>/...
     excluded_x_accounts: str = Field("FirstSquawk,MarketNews_Feed", alias="EXCLUDED_X_ACCOUNTS")
+    # X accounts whose items are always posted, instantly: no importance
+    # scoring, no daily cap or pacing, no pause between posts.
+    priority_x_accounts: str = Field("DeItaone,financialjuice", alias="PRIORITY_X_ACCOUNTS")
 
     # Importance filter: Claude scores each new headline 1-5 and only items
     # scoring >= MIN_IMPORTANCE are posted, at most DAILY_POST_CAP per day.
@@ -117,11 +120,11 @@ class Settings(BaseSettings):
 
     @property
     def excluded_accounts(self) -> frozenset[str]:
-        return frozenset(
-            name.strip().lstrip("@").lower()
-            for name in self.excluded_x_accounts.split(",")
-            if name.strip()
-        )
+        return _account_set(self.excluded_x_accounts)
+
+    @property
+    def priority_accounts(self) -> frozenset[str]:
+        return _account_set(self.priority_x_accounts) - self.excluded_accounts
 
     @field_validator("bot_timezone")
     @classmethod
@@ -146,6 +149,10 @@ class Settings(BaseSettings):
     @classmethod
     def _upper(cls, value: object) -> object:
         return value.upper() if isinstance(value, str) else value
+
+
+def _account_set(value: str) -> frozenset[str]:
+    return frozenset(name.strip().lstrip("@").lower() for name in value.split(",") if name.strip())
 
 
 @lru_cache

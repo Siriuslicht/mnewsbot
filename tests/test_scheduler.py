@@ -390,3 +390,54 @@ async def test_recent_posts_are_sent_for_duplicate_check(storage: NewsStorage, m
     news.items.append(make_item(2, text="CRUDE OIL SURGES 5%"))
     await poller.run_once()
     assert scorer.recent == [[], ["OIL JUMPS 5%"]]
+
+
+# ---- priority X accounts -----------------------------------------------------
+
+
+async def test_priority_accounts_skip_scoring_and_cap(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    items = [
+        make_item(1, link="https://x.com/DeItaone/status/1"),
+        make_item(2, link="https://x.com/financialjuice/status/2"),
+        make_item(3),
+    ]
+    publisher = FakePublisher()
+    scorer = FakeScorer({3: 1})  # priority items get no score at all
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage, scorer, hour=0, daily_cap=1, burst=0,
+        priority_accounts=frozenset({"deitaone", "financialjuice"}),
+    )
+    assert await poller.run_once() == 2
+    assert publisher.posted == [1, 2]
+    assert scorer.calls == [[3]]  # only the regular item went to Claude
+    assert storage.filter_new([1, 2, 3]) == set()
+
+
+async def test_priority_posts_do_not_use_the_daily_cap(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    items = [make_item(i, link=f"https://x.com/DeItaone/status/{i}") for i in range(1, 6)]
+    items.append(make_item(10))
+    publisher = FakePublisher()
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage, FakeScorer({10: 5}), daily_cap=1, burst=0,
+        priority_accounts=frozenset({"deitaone"}),
+    )
+    assert await poller.run_once() == 6
+    assert publisher.posted == [1, 2, 3, 4, 5, 10]
+
+
+async def test_priority_items_post_while_regular_wait_for_batch(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    now = datetime(2026, 11, 24, 12, tzinfo=TASHKENT)
+    items = [
+        make_item(1, ts=now.timestamp()),
+        make_item(2, ts=now.timestamp(), link="https://x.com/financialjuice/status/2"),
+    ]
+    publisher = FakePublisher()
+    scorer = FakeScorer({1: 5})
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage, scorer, score_batch_size=20, score_max_wait=300,
+        priority_accounts=frozenset({"financialjuice"}),
+    )
+    assert await poller.run_once() == 1
+    assert publisher.posted == [2]
+    assert scorer.calls == []  # regular item still waiting for a batch
+    assert storage.filter_new([1, 2]) == {1}

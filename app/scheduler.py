@@ -52,6 +52,7 @@ class NewsPoller:
         initial_sync: bool = True,
         *,
         excluded_accounts: Collection[str] = (),
+        priority_accounts: Collection[str] = (),
         scorer: ImportanceScorer | None = None,
         translator: Translator | None = None,
         score_batch_size: int = 20,
@@ -68,6 +69,9 @@ class NewsPoller:
         self._post_delay = post_delay
         self._initial_sync = initial_sync
         self._excluded_accounts = excluded_accounts
+        # Items from these X accounts skip scoring, the daily cap, pacing and
+        # the pause between posts: they are posted as soon as they are seen.
+        self._priority_accounts = priority_accounts
         self._scorer = scorer  # None = post every non-excluded item (still capped)
         self._translator = translator  # None = post the original English text
         # Score when this many headlines are waiting, or when the oldest one
@@ -109,22 +113,43 @@ class NewsPoller:
             return self._succeed(0)
         logger.info("Found %d new articles", len(new_items))
 
+        priority = [i for i in new_items if is_excluded_source(i.link, self._priority_accounts)]
+        regular = [i for i in new_items if i not in priority]
+
+        # Priority accounts go out first and never wait for scoring or the budget.
+        posted = 0
+        if priority:
+            logger.info("Posting %d items from priority X accounts instantly", len(priority))
+            posted, error = await self._translate_and_post(priority, delay=0, priority=True)
+            if error:
+                return self._fail(error, posted)
+
         try:
-            to_post = await self._select(new_items)
+            to_post = await self._select(regular) if regular else []
         except ImportanceScorerError as exc:
             # Items stay unprocessed and are scored again on the next poll.
-            return self._fail(f"Importance scoring failed: {exc}")
+            return self._fail(f"Importance scoring failed: {exc}", posted)
         except SQLAlchemyError:
             logger.exception("Database error while filtering news")
-            return self._fail("database error")
+            return self._fail("database error", posted)
 
+        more, error = await self._translate_and_post(to_post, delay=self._post_delay)
+        posted += more
+        if error:
+            return self._fail(error, posted)
+        return self._succeed(posted)
+
+    async def _translate_and_post(
+        self, to_post: list[NewsItem], *, delay: float, priority: bool = False
+    ) -> tuple[int, str | None]:
+        """Translate and publish items in order. Returns (posted, error message or None)."""
         if self._translator is not None and to_post:
             try:
                 translations = await self._translator.translate(to_post)
             except TranslatorError as exc:
                 # Never post untranslated: the items stay unprocessed and are
                 # translated and posted on the next poll.
-                return self._fail(f"Translation failed: {exc}")
+                return 0, f"Translation failed: {exc}"
             to_post = [
                 item.model_copy(update={"title_uz": t.title, "description_uz": t.description})
                 for item in to_post
@@ -148,27 +173,27 @@ class NewsPoller:
             except TelegramUnavailableError as exc:
                 # Stop this cycle: the rest would fail too, and stopping keeps
                 # posts in order. Unsaved items are retried on the next poll.
-                return self._fail(f"Telegram API failure for hid={item.hid}: {exc}", posted)
+                return posted, f"Telegram API failure for hid={item.hid}: {exc}"
 
             # Save only AFTER Telegram accepted (or permanently rejected) it,
             # so transient failures get retried.
             try:
                 if delivered:
-                    self._storage.mark_posted(item.hid)
+                    self._storage.mark_posted(item.hid, priority=priority)
                 self._storage.mark_processed(item.hid)
             except SQLAlchemyError:
                 # The post went out but wasn't recorded; it may be re-posted
                 # next cycle. Stop so we don't repeat this for every item.
                 logger.exception("Database error saving hid=%s", item.hid)
-                return self._fail("database error", posted)
+                return posted, "database error"
 
             posted += 1
             self.status.total_posted += 1
             self._recent_posted.append(item.text)
-            logger.info("Posted news hid=%s", item.hid)
-            await self._pause(self._post_delay)
+            logger.info("Posted news hid=%s%s", item.hid, " (priority)" if priority else "")
+            await self._pause(delay)
 
-        return self._succeed(posted)
+        return posted, None
 
     async def _select(self, items: list[NewsItem]) -> list[NewsItem]:
         """Decide which new items to post, oldest first.

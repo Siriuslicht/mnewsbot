@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -12,6 +12,9 @@ from app.services.importance import ImportanceScore
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Category stored for posts from priority X accounts; they don't count toward the cap.
+PRIORITY_CATEGORY = "priority"
 
 
 class NewsStorage:
@@ -79,21 +82,31 @@ class NewsStorage:
             )
             session.commit()
 
-    def mark_posted(self, hid: int) -> None:
-        """Record the post time; this is what the daily cap counts."""
+    def mark_posted(self, hid: int, priority: bool = False) -> None:
+        """Record the post time; this is what the daily cap counts.
+
+        Priority posts are tagged so they don't use up the daily cap.
+        """
         now = datetime.now(UTC)
         with self._session_factory() as session:
             row = session.scalar(select(NewsScore).where(NewsScore.hid == hid))
             if row is None:
-                session.add(NewsScore(hid=hid, posted_at=now))
-            else:
-                row.posted_at = now
+                row = NewsScore(hid=hid)
+                session.add(row)
+            row.posted_at = now
+            if priority:
+                row.category = PRIORITY_CATEGORY
             session.commit()
 
     def count_posted_since(self, since: datetime) -> int:
         with self._session_factory() as session:
             return session.scalar(
-                select(func.count()).select_from(NewsScore).where(NewsScore.posted_at >= since)
+                select(func.count())
+                .select_from(NewsScore)
+                .where(
+                    NewsScore.posted_at >= since,
+                    or_(NewsScore.category.is_(None), NewsScore.category != PRIORITY_CATEGORY),
+                )
             ) or 0
 
     def mark_many(self, hids: Iterable[int]) -> int:
