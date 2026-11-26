@@ -87,7 +87,7 @@ def _shorten(text: str, limit: int) -> str:
 
 
 def _build_message(item: NewsItem, text_limit: int) -> str:
-    lines = ["📰 <b>Market News Pulse</b>", ""]
+    lines = ["📰 <b>Finbrok Market Pulse</b>", ""]
     if item.title_uz:
         # Uzbek translation: bold headline, then the short description.
         lines.append(f"<b>{escape(_shorten(item.title_uz, text_limit), quote=False)}</b>")
