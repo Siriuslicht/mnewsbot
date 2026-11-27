@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # X (Twitter) accounts whose items are never posted, comma-separated and
     # case-insensitive. Matched against links like https://x.com/<account>/...
-    excluded_x_accounts: str = Field("FirstSquawk,MarketNews_Feed", alias="EXCLUDED_X_ACCOUNTS")
+    excluded_x_accounts: str = Field("MarketNews_Feed", alias="EXCLUDED_X_ACCOUNTS")
     # X accounts whose items are always posted, instantly: no importance
     # scoring, no daily cap or pacing, no pause between posts.
     priority_x_accounts: str = Field("DeItaone", alias="PRIORITY_X_ACCOUNTS")

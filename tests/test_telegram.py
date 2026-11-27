@@ -214,6 +214,7 @@ def test_format_shows_asset_hashtags(make_item) -> None:  # type: ignore[no-unty
     item = make_item(1).model_copy(
         update={
             "title_uz": "Nvidia 4,6% ga oshdi",
+            "country": "US",
             "tags": [
                 AssetTag(symbol="NVDA", country="US", change_pct=4.6),
                 AssetTag(symbol="SPX", country="US", change_pct=-2.0),
@@ -225,5 +226,16 @@ def test_format_shows_asset_hashtags(make_item) -> None:  # type: ignore[no-unty
     message = format_news_message(item)
     assert message.startswith(
         "📰 <b>Finbrok Market Pulse</b>\n\n"
-        "⬆️ 🇺🇸 #NVDA = +4,6%\n⬇️ 🇺🇸 #SPX = -2%\n#GOLD\n⬇️ 🇺🇸 #FEDRATE\n\n<b>Nvidia 4,6% ga oshdi</b>"
+        "⬆️ 🇺🇸 #NVDA = +4,6%\n⬇️ 🇺🇸 #SPX = -2%\n#GOLD\n⬇️ 🇺🇸 #FEDRATE\n\n🇺🇸 <b>Nvidia 4,6% ga oshdi</b>"
     )
+
+
+def test_headline_flag_falls_back_to_shared_tag_country(make_item) -> None:  # type: ignore[no-untyped-def]
+    from app.services.marketnews import AssetTag
+
+    item = make_item(1).model_copy(
+        update={"title_uz": "Aksiyalar o'sdi", "tags": [AssetTag(symbol="NVDA", country="US"), AssetTag(symbol="MSFT", country="US")]}
+    )
+    assert "🇺🇸 <b>Aksiyalar o'sdi</b>" in format_news_message(item)
+    mixed = item.model_copy(update={"tags": [AssetTag(symbol="NVDA", country="US"), AssetTag(symbol="SAP", country="DE")]})
+    assert "\n<b>Aksiyalar o'sdi</b>" in format_news_message(mixed)

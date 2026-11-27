@@ -92,9 +92,12 @@ def _build_message(item: NewsItem, text_limit: int) -> str:
         # Hashtag lines like "⬆️ 🇺🇸 #NVDA = +4,6%", one per asset.
         lines += [_tag_line(tag) for tag in item.tags]
         lines.append("")
+    # Flag of the country the news is about, in front of the headline.
+    country = item.country or _shared_country(item.tags)
+    flag = f"{_flag(country)} " if _flag(country) else ""
     if item.title_uz:
         # Uzbek translation: bold headline, then the short description.
-        lines.append(f"<b>{escape(_shorten(item.title_uz, text_limit), quote=False)}</b>")
+        lines.append(f"{flag}<b>{escape(_shorten(item.title_uz, text_limit), quote=False)}</b>")
         if item.description_uz:
             lines.append(escape(_shorten(item.description_uz, text_limit), quote=False))
     else:
@@ -114,13 +117,25 @@ def _tag_line(tag: AssetTag) -> str:
     rising = tag.change_pct > 0 if tag.change_pct else {"up": True, "down": False}.get(tag.direction)
     if rising is not None:
         parts.append("⬆️" if rising else "⬇️")
-    if len(tag.country) == 2 and tag.country.isalpha():
-        # Two regional-indicator letters render as the country's flag.
-        parts.append("".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in tag.country.upper()))
+    if flag := _flag(tag.country):
+        parts.append(flag)
     line = " ".join(parts + [f"#{escape(tag.symbol, quote=False)}"])
     if tag.change_pct is not None:
         line += f" = {_format_pct(tag.change_pct)}"
     return line
+
+
+def _shared_country(tags: list[AssetTag]) -> str:
+    """The tags' country when they all share one (e.g. a list of US stocks)."""
+    countries = {tag.country for tag in tags}
+    return countries.pop() if len(countries) == 1 else ""
+
+
+def _flag(country: str) -> str:
+    """'US' -> 🇺🇸, 'EU' -> 🇪🇺: two regional-indicator letters render as a flag."""
+    if len(country) != 2 or not country.isascii() or not country.isalpha():
+        return ""
+    return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in country.upper())
 
 
 def _format_pct(value: float) -> str:

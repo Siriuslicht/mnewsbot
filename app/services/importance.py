@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.services.marketnews import NewsItem
 from app.utils.logger import get_logger
@@ -48,7 +48,10 @@ little market impact, politics without a clear market angle.
 
 Duplicates: if a headline reports the same news as one in "recently_posted", \
 or as another headline in this batch, it is a duplicate and gets 1. Within a \
-batch keep the most informative version and score only that one normally.
+batch keep the most informative version and score only that one normally. \
+Headlines about the same data release, decision or event are duplicates even \
+when worded differently, for example "ECB survey: 1-yr inflation expectations \
+rise to 3.5%" and "Euro area 1-year CPI expectations rise to 3.5%".
 
 category: one lowercase English word, for example rates, macro, oil, gold, \
 commodities, stocks, earnings, crypto, forex, geopolitics, trade, cis, other.
@@ -130,6 +133,9 @@ class ImportanceScorer:
             )
         except anthropic.APIError as exc:
             raise ImportanceScorerError(f"{type(exc).__name__}: {exc}") from exc
+        except ValidationError as exc:
+            # Claude's answer wasn't valid JSON for the schema (e.g. cut off).
+            raise ImportanceScorerError(f"unusable response: {exc.errors()[:1]}") from exc
 
         usage = response.usage
         logger.info(

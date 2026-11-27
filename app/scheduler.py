@@ -249,6 +249,7 @@ class NewsPoller:
                         "title_uz": t.title,
                         "description_uz": t.description,
                         "tags": list(t.tags),
+                        "country": t.country,
                     }
                 )
                 for item in to_post

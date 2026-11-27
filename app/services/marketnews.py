@@ -44,6 +44,7 @@ class NewsItem(BaseModel):
     title_uz: str | None = Field(None, exclude=True)
     description_uz: str | None = Field(None, exclude=True)
     tags: list[AssetTag] = Field(default_factory=list, exclude=True)
+    country: str = Field("", exclude=True)  # ISO code of the country the news is about
 
     @property
     def published_at(self) -> datetime:

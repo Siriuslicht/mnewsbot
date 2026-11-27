@@ -92,3 +92,13 @@ def test_tags_are_cleaned() -> None:
         AssetTag(symbol="GOLD", country="world"),  # invalid country
     ])
     assert tags == (AssetTag(symbol="NVDA", country="US", change_pct=4.6), AssetTag(symbol="GOLD"))
+
+
+async def test_broken_json_is_a_translator_error(make_item) -> None:  # type: ignore[no-untyped-def]
+    try:
+        _TranslatedBatch.model_validate_json('{"items":[{"id":1,"country":"US,US,US')
+    except Exception as exc:  # noqa: BLE001 - capture the real pydantic error
+        broken = exc
+    translator, _ = make_translator(broken)
+    with pytest.raises(TranslatorError):
+        await translator.translate([make_item(1)])
