@@ -87,7 +87,7 @@ def _shorten(text: str, limit: int) -> str:
 
 
 def _build_message(item: NewsItem, text_limit: int) -> str:
-    lines = ["📰 <b>Finbrok Market Pulse</b>", ""]
+    lines: list[str] = []
     if item.tags:
         # Hashtag lines like "⬆️ 🇺🇸 #NVDA = +4,6%", one per asset.
         lines += [_tag_line(tag) for tag in item.tags]

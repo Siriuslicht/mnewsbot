@@ -82,7 +82,7 @@ def test_format_truncates_without_breaking_entities(make_item) -> None:  # type:
     item = make_item(1, text="&" * 5000)  # each & becomes &amp; (5x longer)
     message = format_news_message(item)
     assert len(message) <= MAX_MESSAGE_LENGTH
-    body = message.split("\n")[2]
+    body = message.split("\n")[0]
     assert body.endswith("…")
     assert body[:-1].replace("&amp;", "") == ""  # only whole entities
 
@@ -225,7 +225,6 @@ def test_format_shows_asset_hashtags(make_item) -> None:  # type: ignore[no-unty
     )
     message = format_news_message(item)
     assert message.startswith(
-        "📰 <b>Finbrok Market Pulse</b>\n\n"
         "⬆️ 🇺🇸 #NVDA = +4,6%\n⬇️ 🇺🇸 #SPX = -2%\n#GOLD\n⬇️ 🇺🇸 #FEDRATE\n\n🇺🇸 <b>Nvidia 4,6% ga oshdi</b>"
     )
 
@@ -239,3 +238,9 @@ def test_headline_flag_falls_back_to_shared_tag_country(make_item) -> None:  # t
     assert "🇺🇸 <b>Aksiyalar o'sdi</b>" in format_news_message(item)
     mixed = item.model_copy(update={"tags": [AssetTag(symbol="NVDA", country="US"), AssetTag(symbol="SAP", country="DE")]})
     assert "\n<b>Aksiyalar o'sdi</b>" in format_news_message(mixed)
+
+
+def test_format_has_no_header_line(make_item) -> None:  # type: ignore[no-untyped-def]
+    message = format_news_message(make_item(1, text="Plain news"))
+    assert message.startswith("Plain news")
+    assert "Finbrok Market Pulse" not in message
