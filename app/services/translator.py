@@ -39,7 +39,9 @@ empty list if it is not about specific assets or indicators. For each tag:
   - symbol: the stock ticker (NVDA, AAPL, MSFT); for indices SPX, NDX, DJI, \
 RUT; for currencies EURUSD, USDRUB, DXY; for commodities GOLD, OIL, SILVER; \
 for crypto BTC, ETH; for a private company a short uppercase name (ANTHROPIC, \
-SPACEX); for rates and indicators FEDRATE, US10Y, CPI, GDP, JOBS, PMI. \
+SPACEX); for central bank rates the bank plus RATE (FEDRATE, ECBRATE, \
+BOERATE, BOJRATE, CBURATE for Uzbekistan); for other rates and indicators \
+US10Y, CPI, GDP, JOBS, PMI. \
 Uppercase letters and digits only.
   - country: the two-letter ISO country code of the company or index (US, CN, \
 JP, DE, UZ), also for private companies (SpaceX is US), or an empty string \

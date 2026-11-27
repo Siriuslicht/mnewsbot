@@ -159,6 +159,15 @@ class NewsPoller:
             logger.exception("Database error while skipping repeats")
             return self._fail("database error")
         if priority:
+            # Scored right away (no batch wait): only financial news passes.
+            try:
+                priority = await self._check_now(priority, self._min_importance)
+            except ImportanceScorerError as exc:
+                return self._fail(f"Priority check failed: {exc}")
+            except SQLAlchemyError:
+                logger.exception("Database error while checking priority items")
+                return self._fail("database error")
+        if priority:
             logger.info("Posting %d items from priority X accounts instantly", len(priority))
             posted, error = await self._translate_and_post(priority, delay=0, priority=True)
             if error:
@@ -170,7 +179,7 @@ class NewsPoller:
         if must:
             try:
                 must = self._drop_repeats(must)
-                must = await self._drop_reworded_repeats(must)
+                must = await self._check_now(must, 2)
             except ImportanceScorerError as exc:
                 return self._fail(f"Repeat check failed: {exc}", posted)
             except SQLAlchemyError:
@@ -210,12 +219,11 @@ class NewsPoller:
             logger.info("Skipped %d items repeating a recent post", len(repeats))
         return keep
 
-    async def _drop_reworded_repeats(self, items: list[NewsItem]) -> list[NewsItem]:
-        """Ask Claude (the importance scorer) whether these repeat a recent post.
+    async def _check_now(self, items: list[NewsItem], min_score: int) -> list[NewsItem]:
+        """Score these right away (no batch wait) and keep those >= min_score.
 
-        Score 1 means duplicate or irrelevant: skipped. Any other score is
-        posted, ignoring the threshold and the daily cap. Scored right away,
-        without waiting for a batch, so they still go out promptly.
+        Claude scores repeats of a recent post and non-financial news low, so
+        this drops both. Kept items skip the daily cap.
         """
         if self._scorer is None:
             return items
@@ -226,11 +234,11 @@ class NewsPoller:
             self._storage.save_scores(fresh)
             scores.update(fresh)
         items = [i for i in items if i.hid in scores]  # missing ones retry next poll
-        repeats = [i for i in items if scores[i.hid].score <= 1]
-        if repeats:
-            self._storage.mark_many(i.hid for i in repeats)
-            logger.info("Claude marked %d must-post items as repeats", len(repeats))
-        return [i for i in items if i not in repeats]
+        dropped = [i for i in items if scores[i.hid].score < min_score]
+        if dropped:
+            self._storage.mark_many(i.hid for i in dropped)
+            logger.info("Skipped %d instant items (repeat or not financial)", len(dropped))
+        return [i for i in items if i not in dropped]
 
     async def _translate_and_post(
         self, to_post: list[NewsItem], *, delay: float, priority: bool = False

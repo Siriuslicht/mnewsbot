@@ -402,14 +402,14 @@ async def test_priority_accounts_skip_scoring_and_cap(storage: NewsStorage, make
         make_item(3),
     ]
     publisher = FakePublisher()
-    scorer = FakeScorer({3: 1})  # priority items get no score at all
+    scorer = FakeScorer({1: 3, 2: 5, 3: 1})
     poller = filtered_poller(
         FakeNews(items), publisher, storage, scorer, hour=0, daily_cap=1, burst=0,
-        priority_accounts=frozenset({"deitaone", "financialjuice"}),
+        priority_accounts=frozenset({"deitaone", "financialjuice"}), min_importance=3,
     )
     assert await poller.run_once() == 2
     assert publisher.posted == [1, 2]
-    assert scorer.calls == [[3]]  # only the regular item went to Claude
+    assert scorer.calls == [[1, 2], [3]]  # priority scored at once, ignoring the cap
     assert storage.filter_new([1, 2, 3]) == set()
 
 
@@ -418,8 +418,8 @@ async def test_priority_posts_do_not_use_the_daily_cap(storage: NewsStorage, mak
     items.append(make_item(10))
     publisher = FakePublisher()
     poller = filtered_poller(
-        FakeNews(items), publisher, storage, FakeScorer({10: 5}), daily_cap=1, burst=0,
-        priority_accounts=frozenset({"deitaone"}),
+        FakeNews(items), publisher, storage, FakeScorer({i: 4 for i in (1, 2, 3, 4, 5, 10)}),
+        daily_cap=1, burst=0, priority_accounts=frozenset({"deitaone"}),
     )
     assert await poller.run_once() == 6
     assert publisher.posted == [1, 2, 3, 4, 5, 10]
@@ -432,14 +432,14 @@ async def test_priority_items_post_while_regular_wait_for_batch(storage: NewsSto
         make_item(2, ts=now.timestamp(), link="https://x.com/financialjuice/status/2"),
     ]
     publisher = FakePublisher()
-    scorer = FakeScorer({1: 5})
+    scorer = FakeScorer({1: 5, 2: 4})
     poller = filtered_poller(
         FakeNews(items), publisher, storage, scorer, score_batch_size=20, score_max_wait=300,
         priority_accounts=frozenset({"financialjuice"}),
     )
     assert await poller.run_once() == 1
     assert publisher.posted == [2]
-    assert scorer.calls == []  # regular item still waiting for a batch
+    assert scorer.calls == [[2]]  # regular item still waiting for a batch
     assert storage.filter_new([1, 2]) == {1}
 
 
@@ -489,14 +489,14 @@ async def test_claude_drops_reworded_must_post_repeats(storage: NewsStorage, mak
         make_item(2, text="NVIDIA REVERSES HUANG DECISION", link="https://x.com/financialjuice/status/2"),
     ]
     publisher = FakePublisher()
-    scorer = FakeScorer({2: 1})  # Claude: repeat of the DeItaone post
+    scorer = FakeScorer({1: 4, 2: 1})  # Claude: 2 repeats the DeItaone post
     poller = filtered_poller(
         FakeNews(items), publisher, storage, scorer,
         priority_accounts=frozenset({"deitaone"}), must_post_keywords=MUST,
     )
     assert await poller.run_once() == 1
     assert publisher.posted == [1]
-    assert scorer.recent[0] == ["$NVDA - *NVIDIA'S ABOUT-FACE ON HUANG"]
+    assert scorer.recent[1] == ["$NVDA - *NVIDIA'S ABOUT-FACE ON HUANG"]
     assert storage.filter_new([2]) == set()
 
 
@@ -525,3 +525,18 @@ async def test_recent_posts_survive_restart(storage: NewsStorage, make_item) -> 
     )
     await restarted.run_once()
     assert publisher.posted == []
+
+
+async def test_non_financial_priority_items_are_dropped(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    items = [
+        make_item(1, text="TRUMP SAYS VICTORY IN IRAN WAR IS WITHIN REACH", link="https://x.com/DeItaone/status/1"),
+        make_item(2, text="$WMT - BLACK FRIDAY SPENDING SET TO RISE", link="https://x.com/DeItaone/status/2"),
+    ]
+    publisher = FakePublisher()
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage, FakeScorer({1: 2, 2: 4}),
+        priority_accounts=frozenset({"deitaone"}), min_importance=3,
+    )
+    assert await poller.run_once() == 1
+    assert publisher.posted == [2]
+    assert storage.filter_new([1]) == set()  # dropped for good, not retried

@@ -30,8 +30,9 @@ Score every headline in "headlines" from 1 to 5:
 other major indices, sharp moves in mega-cap stocks (Nvidia, Apple, Microsoft, \
 Alphabet, Amazon, Meta, Tesla), central bank rate decisions or surprise \
 statements (Fed, ECB, BoJ, PBoC, Central Bank of Uzbekistan), major macro \
-releases (US CPI, jobs report, GDP), major geopolitical shocks that move \
-stock markets.
+releases (US CPI, jobs report, GDP), major geopolitical shocks whose market \
+impact the headline itself states (oil spikes, stocks sell off, sanctions on \
+trade).
 4 = clearly important and new for stock investors: earnings, guidance, deals \
 and big moves of major US companies, index and futures moves, big moves in \
 major currencies (USD, EUR, RUB, CNY), central bank leaders on rates, key \
@@ -42,7 +43,10 @@ price targets, routine or weekly data (weekly ADP, SOFR, minor surveys), \
 ordinary commodity and crypto news, and further remarks by an official who \
 already made the main point.
 2 = minor: small caps, niche crypto tokens, bond auctions, local news with \
-little market impact, politics without a clear market angle.
+little market impact.
+Not financial news, score 1 or 2 however big the story: politics, war, \
+military, crime, hacking, disasters, sports and celebrities, unless the \
+headline itself is about markets, prices, companies, trade or the economy.
 1 = irrelevant: lifestyle, personal finance, retirement tips, promotional or \
 "follow us" posts, and DUPLICATES.
 
