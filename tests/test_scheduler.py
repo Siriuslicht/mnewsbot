@@ -409,7 +409,7 @@ async def test_priority_accounts_skip_scoring_and_cap(storage: NewsStorage, make
     )
     assert await poller.run_once() == 2
     assert publisher.posted == [1, 2]
-    assert scorer.calls == [[1, 2], [3]]  # priority scored at once, ignoring the cap
+    assert scorer.calls == [[1, 2, 3]]  # one call per poll; priority ignores the cap
     assert storage.filter_new([1, 2, 3]) == set()
 
 
@@ -462,8 +462,8 @@ async def test_must_post_keywords_pass_from_any_source(storage: NewsStorage, mak
     )
     assert await poller.run_once() == 2
     assert publisher.posted == [1, 3]  # "slowdown" must not match "dow"
-    # Must-post items are checked for repeats right away, ignoring the threshold.
-    assert scorer.calls == [[1, 3], [4]]
+    # One scoring call per poll; must-post items ignore the threshold.
+    assert scorer.calls == [[1, 3, 4]]
     assert storage.filter_new([1, 2, 3, 4]) == set()
 
 
@@ -496,7 +496,7 @@ async def test_claude_drops_reworded_must_post_repeats(storage: NewsStorage, mak
     )
     assert await poller.run_once() == 1
     assert publisher.posted == [1]
-    assert scorer.recent[1] == ["$NVDA - *NVIDIA'S ABOUT-FACE ON HUANG"]
+    assert scorer.calls == [[1, 2]]  # scored side by side in one call
     assert storage.filter_new([2]) == set()
 
 

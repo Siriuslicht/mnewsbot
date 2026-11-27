@@ -45,7 +45,7 @@ def test_token_is_hidden_in_repr() -> None:
 
 def test_defaults() -> None:
     settings = make_settings()
-    assert settings.poll_interval == 30
+    assert settings.poll_interval == 10
     assert settings.initial_sync_mode is True
 
 

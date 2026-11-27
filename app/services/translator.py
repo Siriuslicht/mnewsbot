@@ -136,7 +136,11 @@ class Translator:
             response = await self._client.messages.parse(
                 model=self._model,
                 max_tokens=400 * len(items) + 200,
-                system=SYSTEM_PROMPT,
+                # Cached: the same instructions go with every call, so after the
+                # first call they cost about a tenth (Haiku caches 512+ tokens).
+                system=[
+                    {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+                ],
                 messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                 output_format=_TranslatedBatch,
                 # Thinking off: translation doesn't need it and it tripled output tokens.
@@ -151,8 +155,10 @@ class Translator:
 
         usage = response.usage
         logger.info(
-            "Claude translated %d items: %d input / %d output tokens",
-            len(items), usage.input_tokens, usage.output_tokens,
+            "Claude translated %d items: %d input (%d cached) / %d output tokens",
+            len(items), usage.input_tokens,
+            getattr(usage, "cache_read_input_tokens", 0) or 0,
+            usage.output_tokens,
         )
         if response.stop_reason != "end_turn" or response.parsed_output is None:
             raise TranslatorError(f"unusable response (stop_reason={response.stop_reason})")

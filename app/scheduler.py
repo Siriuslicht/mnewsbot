@@ -158,6 +158,17 @@ class NewsPoller:
         except SQLAlchemyError:
             logger.exception("Database error while skipping repeats")
             return self._fail("database error")
+        # One Claude scoring call per poll for everything that is due, so the
+        # fixed cost of a call is paid once and Claude sees all of them side by
+        # side (repeats across sources are easier to spot).
+        try:
+            await self._prescore(priority + must + regular)
+        except ImportanceScorerError as exc:
+            return self._fail(f"Importance scoring failed: {exc}")
+        except SQLAlchemyError:
+            logger.exception("Database error while scoring")
+            return self._fail("database error")
+
         if priority:
             # Scored right away (no batch wait): only financial news passes.
             try:
@@ -303,6 +314,32 @@ class NewsPoller:
             await self._pause(delay)
 
         return posted, None
+
+    async def _prescore(self, items: list[NewsItem]) -> None:
+        """Score, in one call, every unscored item that is due now.
+
+        Priority and must-post items are always due; other items only once
+        their batch is ready (SCORE_MAX_WAIT / SCORE_BATCH_SIZE). Items from
+        excluded accounts are never sent unless they are must-post items.
+        """
+        if self._scorer is None or not items:
+            return
+        scores = self._storage.get_scores(i.hid for i in items)
+        instant = [
+            i for i in items
+            if i.hid not in scores
+            and (is_excluded_source(i.link, self._priority_accounts)
+                 or (self._must_post and self._must_post.search(i.text)))
+        ]
+        regular = [
+            i for i in items
+            if i.hid not in scores and i not in instant
+            and not is_excluded_source(i.link, self._excluded_accounts)
+        ]
+        due = instant + (regular if regular and self._batch_ready(regular) else [])
+        if due:
+            fresh = await self._scorer.score(due, list(self._recent_posted))
+            self._storage.save_scores(fresh)
 
     async def _select(self, items: list[NewsItem]) -> list[NewsItem]:
         """Decide which new items to post, oldest first.

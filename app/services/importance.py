@@ -17,6 +17,8 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 BATCH_SIZE = 20
+# Recent posts sent for the repeat check; fewer = cheaper calls.
+RECENT_FOR_CLAUDE = 10
 
 SYSTEM_PROMPT = """\
 You rate financial news headlines for a Telegram channel whose readers are \
@@ -121,14 +123,18 @@ class ImportanceScorer:
         self, items: Sequence[NewsItem], recent_headlines: Sequence[str]
     ) -> dict[int, ImportanceScore]:
         payload = {
-            "recently_posted": [text[:120] for text in recent_headlines],
+            "recently_posted": [text[:100] for text in list(recent_headlines)[-RECENT_FOR_CLAUDE:]],
             "headlines": [{"id": item.hid, "headline": item.text[:500]} for item in items],
         }
         try:
             response = await self._client.messages.parse(
                 model=self._model,
                 max_tokens=60 * len(items) + 200,
-                system=SYSTEM_PROMPT,
+                # Cached: the same instructions go with every call, so after the
+                # first call they cost about a tenth (Haiku caches 512+ tokens).
+                system=[
+                    {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+                ],
                 messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                 output_format=_ScoredBatch,
                 # Simple classification: no extended thinking (saves output tokens).
@@ -143,8 +149,10 @@ class ImportanceScorer:
 
         usage = response.usage
         logger.info(
-            "Claude scored %d headlines: %d input / %d output tokens",
-            len(items), usage.input_tokens, usage.output_tokens,
+            "Claude scored %d headlines: %d input (%d cached) / %d output tokens",
+            len(items), usage.input_tokens,
+            getattr(usage, "cache_read_input_tokens", 0) or 0,
+            usage.output_tokens,
         )
         if response.stop_reason != "end_turn" or response.parsed_output is None:
             raise ImportanceScorerError(f"unusable response (stop_reason={response.stop_reason})")

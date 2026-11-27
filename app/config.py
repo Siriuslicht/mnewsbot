@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     channel_id: str = Field(..., alias="CHANNEL_ID")
 
     # Polling
-    poll_interval: int = Field(30, alias="POLL_INTERVAL", ge=5, le=3600)
+    poll_interval: int = Field(10, alias="POLL_INTERVAL", ge=5, le=3600)
     # On the very first run (empty database) remember the current batch
     # without posting it, so starting the bot doesn't flood the channel.
     initial_sync_mode: bool = Field(True, alias="INITIAL_SYNC_MODE")
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # LATE_HOLD seconds, so the other source's version is posted first and
     # theirs is skipped as a repeat.
     late_x_accounts: str = Field("financialjuice", alias="LATE_X_ACCOUNTS")
-    late_hold: int = Field(180, alias="LATE_HOLD", ge=0, le=1800)
+    late_hold: int = Field(0, alias="LATE_HOLD", ge=0, le=1800)
     # Headlines mentioning any of these (whole words, case-insensitive) are
     # posted instantly from ANY source, even excluded accounts, without
     # scoring or the daily cap. Repeats of a recent post are still skipped.
@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # Cost saving: headlines are scored together, up to SCORE_BATCH_SIZE per
     # Claude call, waiting at most SCORE_MAX_WAIT seconds after publication.
     score_batch_size: int = Field(20, alias="SCORE_BATCH_SIZE", ge=1, le=50)
-    score_max_wait: int = Field(60, alias="SCORE_MAX_WAIT", ge=0, le=1800)
+    score_max_wait: int = Field(0, alias="SCORE_MAX_WAIT", ge=0, le=1800)
     daily_post_cap: int = Field(200, alias="DAILY_POST_CAP", ge=1)
     # Posts are spread over the day: by 12:00 at most ~half the cap is used.
     # POST_BURST lets this many extra posts through when a lot happens at once.
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
 
     # Pause between consecutive Telegram posts. Telegram limits bots to roughly
     # 20 messages per minute in a single channel.
-    post_delay: float = Field(3.0, alias="POST_DELAY", ge=0)
+    post_delay: float = Field(1.0, alias="POST_DELAY", ge=0)
     # Attempts per message for transient errors (network, timeouts, rate limits).
     telegram_max_attempts: int = Field(4, alias="TELEGRAM_MAX_ATTEMPTS", ge=1, le=10)
 
