@@ -5,6 +5,7 @@ It knows nothing about Telegram or the database.
 """
 
 from datetime import UTC, datetime
+from typing import Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -24,6 +25,7 @@ class AssetTag(BaseModel):
     symbol: str  # e.g. NVDA, SPX; letters and digits only
     country: str = ""  # ISO 3166 two-letter code for the flag, or "" for none
     change_pct: float | None = None  # move stated in the news, if any
+    direction: Literal["up", "down", "none"] = "none"  # rising or falling, per the news
 
 
 class NewsItem(BaseModel):

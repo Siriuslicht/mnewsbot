@@ -83,11 +83,11 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = Field(None, alias="ANTHROPIC_API_KEY")
     claude_model: str = Field("claude-haiku-5-5", alias="CLAUDE_MODEL")
     claude_timeout: float = Field(30.0, alias="CLAUDE_TIMEOUT", gt=0)
-    min_importance: int = Field(4, alias="MIN_IMPORTANCE", ge=1, le=5)
+    min_importance: int = Field(3, alias="MIN_IMPORTANCE", ge=1, le=5)
     # Cost saving: headlines are scored together, up to SCORE_BATCH_SIZE per
     # Claude call, waiting at most SCORE_MAX_WAIT seconds after publication.
     score_batch_size: int = Field(20, alias="SCORE_BATCH_SIZE", ge=1, le=50)
-    score_max_wait: int = Field(300, alias="SCORE_MAX_WAIT", ge=0, le=1800)
+    score_max_wait: int = Field(60, alias="SCORE_MAX_WAIT", ge=0, le=1800)
     daily_post_cap: int = Field(200, alias="DAILY_POST_CAP", ge=1)
     # Posts are spread over the day: by 12:00 at most ~half the cap is used.
     # POST_BURST lets this many extra posts through when a lot happens at once.

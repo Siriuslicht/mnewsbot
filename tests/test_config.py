@@ -68,7 +68,7 @@ def test_filter_requires_claude_key() -> None:
     with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY"):
         make_settings(IMPORTANCE_FILTER="true")
     settings = make_settings(IMPORTANCE_FILTER="true", ANTHROPIC_API_KEY="test-key")
-    assert settings.daily_post_cap == 200 and settings.min_importance == 4
+    assert settings.daily_post_cap == 200 and settings.min_importance == 3
 
 
 def test_excluded_accounts_are_normalised() -> None:

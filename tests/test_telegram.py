@@ -218,11 +218,12 @@ def test_format_shows_asset_hashtags(make_item) -> None:  # type: ignore[no-unty
                 AssetTag(symbol="NVDA", country="US", change_pct=4.6),
                 AssetTag(symbol="SPX", country="US", change_pct=-2.0),
                 AssetTag(symbol="GOLD"),
+                AssetTag(symbol="FEDRATE", country="US", direction="down"),
             ],
         }
     )
     message = format_news_message(item)
     assert message.startswith(
         "📰 <b>Finbrok Market Pulse</b>\n\n"
-        "⬆️ 🇺🇸 #NVDA = +4,6%\n⬇️ 🇺🇸 #SPX = -2%\n#GOLD\n\n<b>Nvidia 4,6% ga oshdi</b>"
+        "⬆️ 🇺🇸 #NVDA = +4,6%\n⬇️ 🇺🇸 #SPX = -2%\n#GOLD\n⬇️ 🇺🇸 #FEDRATE\n\n<b>Nvidia 4,6% ga oshdi</b>"
     )

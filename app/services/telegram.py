@@ -110,8 +110,10 @@ def _build_message(item: NewsItem, text_limit: int) -> str:
 
 def _tag_line(tag: AssetTag) -> str:
     parts: list[str] = []
-    if tag.change_pct:
-        parts.append("⬆️" if tag.change_pct > 0 else "⬇️")
+    # A stated percentage decides the arrow; otherwise Claude's reading of the news.
+    rising = tag.change_pct > 0 if tag.change_pct else {"up": True, "down": False}.get(tag.direction)
+    if rising is not None:
+        parts.append("⬆️" if rising else "⬇️")
     if len(tag.country) == 2 and tag.country.isalpha():
         # Two regional-indicator letters render as the country's flag.
         parts.append("".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in tag.country.upper()))

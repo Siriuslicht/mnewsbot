@@ -28,19 +28,23 @@ For every item return:
 - title: the headline in Uzbek.
 - description: the rest of the text in Uzbek (one or two short sentences), or \
 an empty string if the item is only a headline.
-- tags: the stocks, indices, currencies or commodities the news is mainly \
-about, at most 6, most important first, or an empty list if it is not about \
-specific assets. For each tag:
+- tags: the stocks, indices, currencies, commodities, rates or economic \
+indicators the news is mainly about, at most 6, most important first, or an \
+empty list if it is not about specific assets or indicators. For each tag:
   - symbol: the stock ticker (NVDA, AAPL, MSFT); for indices SPX, NDX, DJI, \
 RUT; for currencies EURUSD, USDRUB, DXY; for commodities GOLD, OIL, SILVER; \
 for crypto BTC, ETH; for a private company a short uppercase name (ANTHROPIC, \
-SPACEX). Uppercase letters and digits only.
+SPACEX); for rates and indicators FEDRATE, US10Y, CPI, GDP, JOBS, PMI. \
+Uppercase letters and digits only.
   - country: the two-letter ISO country code of the company or index (US, CN, \
 JP, DE, UZ), also for private companies (SpaceX is US), or an empty string \
 for currencies, commodities and crypto.
   - change_pct: the percentage move the news states for that asset, as a \
 number (4.6 or -2.1), or null if no percentage is stated. Never guess or \
 calculate a number.
+  - direction: "up" if the news says it rises, gains, beats, is raised, \
+upgraded or hiked; "down" if it falls, drops, misses, is cut, lowered or \
+downgraded; "none" if the news doesn't say which way it moves.
 
 Rules:
 - Write natural, concise Uzbek in normal sentence case, never ALL CAPS, even \
@@ -161,6 +165,7 @@ def _clean_tags(tags: Sequence[AssetTag]) -> tuple[AssetTag, ...]:
                 symbol=symbol,
                 country=country if _COUNTRY.match(country) else "",
                 change_pct=tag.change_pct,
+                direction=tag.direction,
             )
         )
     return tuple(cleaned[:MAX_TAGS])
