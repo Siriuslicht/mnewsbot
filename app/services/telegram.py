@@ -31,7 +31,7 @@ from telegram.error import (
     TimedOut,
 )
 
-from app.services.marketnews import NewsItem
+from app.services.marketnews import AssetTag, NewsItem
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -88,6 +88,10 @@ def _shorten(text: str, limit: int) -> str:
 
 def _build_message(item: NewsItem, text_limit: int) -> str:
     lines = ["📰 <b>Finbrok Market Pulse</b>", ""]
+    if item.tags:
+        # Hashtag lines like "⬆️ 🇺🇸 #NVDA = +4,6%", one per asset.
+        lines += [_tag_line(tag) for tag in item.tags]
+        lines.append("")
     if item.title_uz:
         # Uzbek translation: bold headline, then the short description.
         lines.append(f"<b>{escape(_shorten(item.title_uz, text_limit), quote=False)}</b>")
@@ -102,6 +106,25 @@ def _build_message(item: NewsItem, text_limit: int) -> str:
         lines += ["", f'<a href="{href}">Source...</a>']
 
     return "\n".join(lines)
+
+
+def _tag_line(tag: AssetTag) -> str:
+    parts: list[str] = []
+    if tag.change_pct:
+        parts.append("⬆️" if tag.change_pct > 0 else "⬇️")
+    if len(tag.country) == 2 and tag.country.isalpha():
+        # Two regional-indicator letters render as the country's flag.
+        parts.append("".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in tag.country.upper()))
+    line = " ".join(parts + [f"#{escape(tag.symbol, quote=False)}"])
+    if tag.change_pct is not None:
+        line += f" = {_format_pct(tag.change_pct)}"
+    return line
+
+
+def _format_pct(value: float) -> str:
+    """+4,6% / -2% / 0% with the Uzbek decimal comma."""
+    text = f"{value:+.2f}".rstrip("0").rstrip(".").replace(".", ",")
+    return ("0" if text in ("+0", "-0") else text) + "%"
 
 
 def _is_safe_url(url: str) -> bool:

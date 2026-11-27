@@ -79,3 +79,16 @@ async def test_truncated_output_is_an_error(make_item) -> None:  # type: ignore[
     translator, _ = make_translator(response([(1, "Yangilik", "")], stop_reason="max_tokens"))
     with pytest.raises(TranslatorError):
         await translator.translate([make_item(1)])
+
+
+def test_tags_are_cleaned() -> None:
+    from app.services.marketnews import AssetTag
+    from app.services.translator import _clean_tags
+
+    tags = _clean_tags([
+        AssetTag(symbol="$nvda", country="us", change_pct=4.6),
+        AssetTag(symbol="NVDA", country="US"),  # repeat
+        AssetTag(symbol="S&P 500", country="US"),  # invalid symbol
+        AssetTag(symbol="GOLD", country="world"),  # invalid country
+    ])
+    assert tags == (AssetTag(symbol="NVDA", country="US", change_pct=4.6), AssetTag(symbol="GOLD"))

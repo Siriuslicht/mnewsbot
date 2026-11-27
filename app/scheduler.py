@@ -15,7 +15,13 @@ from datetime import UTC, datetime, tzinfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.services.filters import day_start, is_excluded_source, paced_allowance
+from app.services.filters import (
+    day_start,
+    is_duplicate,
+    is_excluded_source,
+    keyword_pattern,
+    paced_allowance,
+)
 from app.services.importance import ImportanceScore, ImportanceScorer, ImportanceScorerError
 from app.services.marketnews import MarketNewsClient, MarketNewsError, NewsItem
 from app.services.translator import Translator, TranslatorError
@@ -53,6 +59,7 @@ class NewsPoller:
         *,
         excluded_accounts: Collection[str] = (),
         priority_accounts: Collection[str] = (),
+        must_post_keywords: Collection[str] = (),
         scorer: ImportanceScorer | None = None,
         translator: Translator | None = None,
         score_batch_size: int = 20,
@@ -72,6 +79,9 @@ class NewsPoller:
         # Items from these X accounts skip scoring, the daily cap, pacing and
         # the pause between posts: they are posted as soon as they are seen.
         self._priority_accounts = priority_accounts
+        # Headlines matching these keywords are posted instantly from any
+        # source (even excluded ones), unless they repeat a recent post.
+        self._must_post = keyword_pattern(must_post_keywords)
         self._scorer = scorer  # None = post every non-excluded item (still capped)
         self._translator = translator  # None = post the original English text
         # Score when this many headlines are waiting, or when the oldest one
@@ -114,7 +124,9 @@ class NewsPoller:
         logger.info("Found %d new articles", len(new_items))
 
         priority = [i for i in new_items if is_excluded_source(i.link, self._priority_accounts)]
-        regular = [i for i in new_items if i not in priority]
+        rest = [i for i in new_items if i not in priority]
+        must = [i for i in rest if self._must_post and self._must_post.search(i.text)]
+        regular = [i for i in rest if i not in must]
 
         # Priority accounts go out first and never wait for scoring or the budget.
         posted = 0
@@ -123,6 +135,20 @@ class NewsPoller:
             posted, error = await self._translate_and_post(priority, delay=0, priority=True)
             if error:
                 return self._fail(error, posted)
+
+        # Then must-post keywords (Nvidia, major indices, ...) from any source.
+        if must:
+            try:
+                must = self._drop_repeats(must)
+            except SQLAlchemyError:
+                logger.exception("Database error while skipping repeats")
+                return self._fail("database error", posted)
+            if must:
+                logger.info("Posting %d must-post keyword items instantly", len(must))
+                more, error = await self._translate_and_post(must, delay=0, priority=True)
+                posted += more
+                if error:
+                    return self._fail(error, posted)
 
         try:
             to_post = await self._select(regular) if regular else []
@@ -139,6 +165,18 @@ class NewsPoller:
             return self._fail(error, posted)
         return self._succeed(posted)
 
+    def _drop_repeats(self, items: list[NewsItem]) -> list[NewsItem]:
+        """Skip headlines that repeat a recent post or an earlier one in this list."""
+        keep: list[NewsItem] = []
+        repeats: list[NewsItem] = []
+        for item in items:
+            seen = [*self._recent_posted, *(k.text for k in keep)]
+            (repeats if is_duplicate(item.text, seen) else keep).append(item)
+        if repeats:
+            self._storage.mark_many(i.hid for i in repeats)
+            logger.info("Skipped %d must-post items repeating a recent post", len(repeats))
+        return keep
+
     async def _translate_and_post(
         self, to_post: list[NewsItem], *, delay: float, priority: bool = False
     ) -> tuple[int, str | None]:
@@ -151,7 +189,13 @@ class NewsPoller:
                 # translated and posted on the next poll.
                 return 0, f"Translation failed: {exc}"
             to_post = [
-                item.model_copy(update={"title_uz": t.title, "description_uz": t.description})
+                item.model_copy(
+                    update={
+                        "title_uz": t.title,
+                        "description_uz": t.description,
+                        "tags": list(t.tags),
+                    }
+                )
                 for item in to_post
                 if (t := translations.get(item.hid))
             ]

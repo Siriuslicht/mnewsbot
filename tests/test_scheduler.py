@@ -441,3 +441,42 @@ async def test_priority_items_post_while_regular_wait_for_batch(storage: NewsSto
     assert publisher.posted == [2]
     assert scorer.calls == []  # regular item still waiting for a batch
     assert storage.filter_new([1, 2]) == {1}
+
+
+# ---- must-post keywords ------------------------------------------------------
+
+MUST = ("nvidia", "s&p 500", "nasdaq", "dow")
+
+
+async def test_must_post_keywords_pass_from_any_source(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    items = [
+        make_item(1, text="NVIDIA UP 4.6%", link="https://x.com/FirstSquawk/status/1"),
+        make_item(2, text="Markets slowdown worries", link="https://x.com/FirstSquawk/status/2"),
+        make_item(3, text="NASDAQ 100 DROPS 2%"),
+        make_item(4, text="Small bank merger"),
+    ]
+    publisher = FakePublisher()
+    scorer = FakeScorer({4: 1})
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage, scorer, daily_cap=1, burst=0, must_post_keywords=MUST
+    )
+    assert await poller.run_once() == 2
+    assert publisher.posted == [1, 3]  # "slowdown" must not match "dow"
+    assert scorer.calls == [[4]]  # must-post items skip Claude scoring
+    assert storage.filter_new([1, 2, 3, 4]) == set()
+
+
+async def test_must_post_repeats_are_skipped(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    items = [
+        make_item(1, text="S&P 500 FUTURES EXTEND GAINS TO 2%", link="https://x.com/DeItaone/status/1"),
+        make_item(2, text="S&P 500 INDEX FUTURES EXTEND GAIN TO 2%", link="https://x.com/FirstSquawk/status/2"),
+        make_item(3, text="NASDAQ 100 EXTENDS DECLINE TO 3%"),
+    ]
+    publisher = FakePublisher()
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage,
+        priority_accounts=frozenset({"deitaone"}), must_post_keywords=MUST,
+    )
+    assert await poller.run_once() == 2
+    assert publisher.posted == [1, 3]
+    assert storage.filter_new([2]) == set()  # the repeat is recorded, never retried

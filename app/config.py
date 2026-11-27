@@ -60,7 +60,15 @@ class Settings(BaseSettings):
     excluded_x_accounts: str = Field("FirstSquawk,MarketNews_Feed", alias="EXCLUDED_X_ACCOUNTS")
     # X accounts whose items are always posted, instantly: no importance
     # scoring, no daily cap or pacing, no pause between posts.
-    priority_x_accounts: str = Field("DeItaone,financialjuice", alias="PRIORITY_X_ACCOUNTS")
+    priority_x_accounts: str = Field("DeItaone", alias="PRIORITY_X_ACCOUNTS")
+    # Headlines mentioning any of these (whole words, case-insensitive) are
+    # posted instantly from ANY source, even excluded accounts, without
+    # scoring or the daily cap. Repeats of a recent post are still skipped.
+    must_post_keywords: str = Field(
+        "nvidia,nvda,s&p 500,s&p500,spx,nasdaq,dow jones,dow,russell 2000,"
+        "apple,aapl,microsoft,msft,alphabet,google,googl,amazon,amzn,meta,tesla,tsla",
+        alias="MUST_POST_KEYWORDS",
+    )
 
     # Importance filter: Claude scores each new headline 1-5 and only items
     # scoring >= MIN_IMPORTANCE are posted, at most DAILY_POST_CAP per day.
@@ -121,6 +129,10 @@ class Settings(BaseSettings):
     @property
     def excluded_accounts(self) -> frozenset[str]:
         return _account_set(self.excluded_x_accounts)
+
+    @property
+    def must_post(self) -> tuple[str, ...]:
+        return tuple(k.strip().lower() for k in self.must_post_keywords.split(",") if k.strip())
 
     @property
     def priority_accounts(self) -> frozenset[str]:

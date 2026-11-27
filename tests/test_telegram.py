@@ -206,3 +206,23 @@ async def test_check_connection_is_cached() -> None:
     assert await publisher.check_connection()
     assert await publisher.check_connection()
     assert bot.get_me.await_count == 1
+
+
+def test_format_shows_asset_hashtags(make_item) -> None:  # type: ignore[no-untyped-def]
+    from app.services.marketnews import AssetTag
+
+    item = make_item(1).model_copy(
+        update={
+            "title_uz": "Nvidia 4,6% ga oshdi",
+            "tags": [
+                AssetTag(symbol="NVDA", country="US", change_pct=4.6),
+                AssetTag(symbol="SPX", country="US", change_pct=-2.0),
+                AssetTag(symbol="GOLD"),
+            ],
+        }
+    )
+    message = format_news_message(item)
+    assert message.startswith(
+        "📰 <b>Finbrok Market Pulse</b>\n\n"
+        "⬆️ 🇺🇸 #NVDA = +4,6%\n⬇️ 🇺🇸 #SPX = -2%\n#GOLD\n\n<b>Nvidia 4,6% ga oshdi</b>"
+    )

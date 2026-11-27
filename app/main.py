@@ -105,6 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.initial_sync_mode,
             excluded_accounts=settings.excluded_accounts,
             priority_accounts=settings.priority_accounts,
+            must_post_keywords=settings.must_post,
             scorer=scorer,
             translator=translator,
             score_batch_size=settings.score_batch_size,
@@ -119,6 +120,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "Priority X accounts (posted instantly): %s",
                 ", ".join(sorted(settings.priority_accounts)),
             )
+        if settings.must_post:
+            logger.info("Must-post keywords (any source): %s", ", ".join(settings.must_post))
         scheduler = create_scheduler(poller, settings.poll_interval)
         scheduler.start()
         app.state.poller = poller

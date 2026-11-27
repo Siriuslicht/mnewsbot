@@ -1,7 +1,9 @@
-"""Pure helpers that decide what may be posted: source exclusion and daily pacing."""
+"""Pure helpers that decide what may be posted: source exclusion, must-post
+keywords, duplicate detection and daily pacing."""
 
 import math
-from collections.abc import Collection
+import re
+from collections.abc import Collection, Iterable
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
@@ -35,3 +37,39 @@ def paced_allowance(now_local: datetime, daily_cap: int, burst: int) -> int:
     """
     elapsed = (now_local - day_start(now_local)) / timedelta(days=1)
     return min(daily_cap, math.ceil(daily_cap * elapsed) + burst)
+
+
+def keyword_pattern(keywords: Collection[str]) -> re.Pattern[str] | None:
+    """One case-insensitive regex matching any keyword as a whole word.
+
+    "nvda" matches "$NVDA" and "NVDA:", "dow" does not match "down".
+    """
+    words = sorted({k.strip() for k in keywords if k.strip()}, key=len, reverse=True)
+    if not words:
+        return None
+    alternatives = "|".join(re.escape(word) for word in words)
+    return re.compile(rf"(?<![a-z0-9])(?:{alternatives})(?![a-z0-9])", re.IGNORECASE)
+
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _words(text: str) -> set[str]:
+    # Crude plural folding so "gain" and "gains" count as the same word.
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in _WORD.findall(text.lower())}
+
+
+def is_duplicate(text: str, others: Iterable[str], threshold: float = 0.6) -> bool:
+    """True if `text` shares most of its words with one of `others`.
+
+    Catches the same headline reposted by several squawk accounts with small
+    wording differences ("S&P 500 FUTURES EXTEND GAINS TO 2%").
+    """
+    words = _words(text)
+    if not words:
+        return False
+    for other in others:
+        other_words = _words(other)
+        if other_words and len(words & other_words) / len(words | other_words) >= threshold:
+            return True
+    return False

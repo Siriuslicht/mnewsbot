@@ -6,13 +6,14 @@ translated, which keeps the cost down.
 """
 
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.services.marketnews import NewsItem
+from app.services.marketnews import AssetTag, NewsItem
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -27,6 +28,19 @@ For every item return:
 - title: the headline in Uzbek.
 - description: the rest of the text in Uzbek (one or two short sentences), or \
 an empty string if the item is only a headline.
+- tags: the stocks, indices, currencies or commodities the news is mainly \
+about, at most 6, most important first, or an empty list if it is not about \
+specific assets. For each tag:
+  - symbol: the stock ticker (NVDA, AAPL, MSFT); for indices SPX, NDX, DJI, \
+RUT; for currencies EURUSD, USDRUB, DXY; for commodities GOLD, OIL, SILVER; \
+for crypto BTC, ETH; for a private company a short uppercase name (ANTHROPIC, \
+SPACEX). Uppercase letters and digits only.
+  - country: the two-letter ISO country code of the company or index (US, CN, \
+JP, DE, UZ), also for private companies (SpaceX is US), or an empty string \
+for currencies, commodities and crypto.
+  - change_pct: the percentage move the news states for that asset, as a \
+number (4.6 or -2.1), or null if no percentage is stated. Never guess or \
+calculate a number.
 
 Rules:
 - Write natural, concise Uzbek in normal sentence case, never ALL CAPS, even \
@@ -49,12 +63,14 @@ class TranslatorError(Exception):
 class Translation:
     title: str
     description: str
+    tags: tuple[AssetTag, ...] = ()
 
 
 class _TranslatedItem(BaseModel):
     id: int
     title: str
     description: str
+    tags: list[AssetTag] = Field(default_factory=list)
 
 
 class _TranslatedBatch(BaseModel):
@@ -90,7 +106,7 @@ class Translator:
         try:
             response = await self._client.messages.parse(
                 model=self._model,
-                max_tokens=300 * len(items) + 200,
+                max_tokens=400 * len(items) + 200,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                 output_format=_TranslatedBatch,
@@ -111,7 +127,9 @@ class Translator:
 
         wanted = {item.hid for item in items}
         results = {
-            entry.id: Translation(entry.title.strip(), entry.description.strip())
+            entry.id: Translation(
+                entry.title.strip(), entry.description.strip(), _clean_tags(entry.tags)
+            )
             for entry in response.parsed_output.items
             if entry.id in wanted and entry.title.strip()
         }
@@ -121,3 +139,28 @@ class Translator:
 
     async def close(self) -> None:
         await self._client.close()
+
+
+_SYMBOL = re.compile(r"^[A-Z0-9]{1,12}$")
+_COUNTRY = re.compile(r"^[A-Z]{2}$")
+MAX_TAGS = 6
+
+
+def _clean_tags(tags: Sequence[AssetTag]) -> tuple[AssetTag, ...]:
+    """Drop malformed or repeated tags so a bad answer never breaks a post."""
+    seen: set[str] = set()
+    cleaned: list[AssetTag] = []
+    for tag in tags:
+        symbol = tag.symbol.strip().lstrip("#$").upper()
+        if not _SYMBOL.match(symbol) or symbol in seen:
+            continue
+        country = tag.country.strip().upper()
+        seen.add(symbol)
+        cleaned.append(
+            AssetTag(
+                symbol=symbol,
+                country=country if _COUNTRY.match(country) else "",
+                change_pct=tag.change_pct,
+            )
+        )
+    return tuple(cleaned[:MAX_TAGS])

@@ -18,6 +18,14 @@ class MarketNewsError(Exception):
     """Raised when the API is unreachable or returns something unusable."""
 
 
+class AssetTag(BaseModel):
+    """A stock, index or other asset the news is about, shown as a hashtag line."""
+
+    symbol: str  # e.g. NVDA, SPX; letters and digits only
+    country: str = ""  # ISO 3166 two-letter code for the flag, or "" for none
+    change_pct: float | None = None  # move stated in the news, if any
+
+
 class NewsItem(BaseModel):
     """One news item. Only the fields we use are declared; extras are ignored."""
 
@@ -33,6 +41,7 @@ class NewsItem(BaseModel):
     # Filled in by the translator, never by the API.
     title_uz: str | None = Field(None, exclude=True)
     description_uz: str | None = Field(None, exclude=True)
+    tags: list[AssetTag] = Field(default_factory=list, exclude=True)
 
     @property
     def published_at(self) -> datetime:
