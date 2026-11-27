@@ -60,6 +60,8 @@ class NewsPoller:
         excluded_accounts: Collection[str] = (),
         priority_accounts: Collection[str] = (),
         must_post_keywords: Collection[str] = (),
+        late_accounts: Collection[str] = (),
+        late_hold: float = 0,
         scorer: ImportanceScorer | None = None,
         translator: Translator | None = None,
         score_batch_size: int = 20,
@@ -82,6 +84,11 @@ class NewsPoller:
         # Headlines matching these keywords are posted instantly from any
         # source (even excluded ones), unless they repeat a recent post.
         self._must_post = keyword_pattern(must_post_keywords)
+        # Items from these accounts wait `late_hold` seconds before anything is
+        # decided, so the same news from another source is posted first and
+        # theirs is dropped as a repeat (financialjuice is usually ~2 min early).
+        self._late_accounts = late_accounts
+        self._late_hold = late_hold
         self._scorer = scorer  # None = post every non-excluded item (still capped)
         self._translator = translator  # None = post the original English text
         # Score when this many headlines are waiting, or when the oldest one
@@ -96,9 +103,13 @@ class NewsPoller:
         self._stopping = asyncio.Event()
         self._current_task: asyncio.Task[None] | None = None
         self.status = PollerStatus()
-        # Recently posted headlines, so Claude can spot repeats of the same story.
-        # In memory only: after a restart the first few repeats may slip through.
+        # Recently posted headlines, so repeats of the same story are skipped.
+        # Stored in the database too, so a restart doesn't forget them.
         self._recent_posted: deque[str] = deque(maxlen=RECENT_HEADLINES)
+        try:
+            self._recent_posted.extend(storage.recent_posted_texts(RECENT_HEADLINES))
+        except SQLAlchemyError:
+            logger.exception("Could not load recent posts; repeat check starts empty")
 
     async def run_once(self) -> int:
         """Run one polling cycle and return how many items were posted.
@@ -123,13 +134,30 @@ class NewsPoller:
             return self._succeed(0)
         logger.info("Found %d new articles", len(new_items))
 
-        priority = [i for i in new_items if is_excluded_source(i.link, self._priority_accounts)]
-        rest = [i for i in new_items if i not in priority]
+        now = self._clock()
+        held = [
+            i for i in new_items
+            if is_excluded_source(i.link, self._late_accounts)
+            and (now - i.published_at).total_seconds() < self._late_hold
+        ]
+        if held:
+            # Left unprocessed: they come back as new on a later poll.
+            logger.info("Holding %d items from late accounts to catch repeats", len(held))
+        ready = [i for i in new_items if i not in held]
+
+        priority = [i for i in ready if is_excluded_source(i.link, self._priority_accounts)]
+        rest = [i for i in ready if i not in priority]
         must = [i for i in rest if self._must_post and self._must_post.search(i.text)]
         regular = [i for i in rest if i not in must]
 
         # Priority accounts go out first and never wait for scoring or the budget.
+        # Only exact-looking repeats of a recent post are skipped (free check).
         posted = 0
+        try:
+            priority = self._drop_repeats(priority)
+        except SQLAlchemyError:
+            logger.exception("Database error while skipping repeats")
+            return self._fail("database error")
         if priority:
             logger.info("Posting %d items from priority X accounts instantly", len(priority))
             posted, error = await self._translate_and_post(priority, delay=0, priority=True)
@@ -137,11 +165,16 @@ class NewsPoller:
                 return self._fail(error, posted)
 
         # Then must-post keywords (Nvidia, major indices, ...) from any source.
+        # Claude checks them against recent posts first, because the same news
+        # from different squawk accounts is often reworded.
         if must:
             try:
                 must = self._drop_repeats(must)
+                must = await self._drop_reworded_repeats(must)
+            except ImportanceScorerError as exc:
+                return self._fail(f"Repeat check failed: {exc}", posted)
             except SQLAlchemyError:
-                logger.exception("Database error while skipping repeats")
+                logger.exception("Database error while checking repeats")
                 return self._fail("database error", posted)
             if must:
                 logger.info("Posting %d must-post keyword items instantly", len(must))
@@ -174,8 +207,30 @@ class NewsPoller:
             (repeats if is_duplicate(item.text, seen) else keep).append(item)
         if repeats:
             self._storage.mark_many(i.hid for i in repeats)
-            logger.info("Skipped %d must-post items repeating a recent post", len(repeats))
+            logger.info("Skipped %d items repeating a recent post", len(repeats))
         return keep
+
+    async def _drop_reworded_repeats(self, items: list[NewsItem]) -> list[NewsItem]:
+        """Ask Claude (the importance scorer) whether these repeat a recent post.
+
+        Score 1 means duplicate or irrelevant: skipped. Any other score is
+        posted, ignoring the threshold and the daily cap. Scored right away,
+        without waiting for a batch, so they still go out promptly.
+        """
+        if self._scorer is None:
+            return items
+        scores = self._storage.get_scores(i.hid for i in items)
+        unscored = [i for i in items if i.hid not in scores]
+        if unscored:
+            fresh = await self._scorer.score(unscored, list(self._recent_posted))
+            self._storage.save_scores(fresh)
+            scores.update(fresh)
+        items = [i for i in items if i.hid in scores]  # missing ones retry next poll
+        repeats = [i for i in items if scores[i.hid].score <= 1]
+        if repeats:
+            self._storage.mark_many(i.hid for i in repeats)
+            logger.info("Claude marked %d must-post items as repeats", len(repeats))
+        return [i for i in items if i not in repeats]
 
     async def _translate_and_post(
         self, to_post: list[NewsItem], *, delay: float, priority: bool = False
@@ -224,6 +279,7 @@ class NewsPoller:
             try:
                 if delivered:
                     self._storage.mark_posted(item.hid, priority=priority)
+                    self._storage.save_recent_post(item.hid, item.text)
                 self._storage.mark_processed(item.hid)
             except SQLAlchemyError:
                 # The post went out but wasn't recorded; it may be re-posted

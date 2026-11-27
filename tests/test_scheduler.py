@@ -456,13 +456,14 @@ async def test_must_post_keywords_pass_from_any_source(storage: NewsStorage, mak
         make_item(4, text="Small bank merger"),
     ]
     publisher = FakePublisher()
-    scorer = FakeScorer({4: 1})
+    scorer = FakeScorer({1: 2, 3: 3, 4: 1})
     poller = filtered_poller(
         FakeNews(items), publisher, storage, scorer, daily_cap=1, burst=0, must_post_keywords=MUST
     )
     assert await poller.run_once() == 2
     assert publisher.posted == [1, 3]  # "slowdown" must not match "dow"
-    assert scorer.calls == [[4]]  # must-post items skip Claude scoring
+    # Must-post items are checked for repeats right away, ignoring the threshold.
+    assert scorer.calls == [[1, 3], [4]]
     assert storage.filter_new([1, 2, 3, 4]) == set()
 
 
@@ -480,3 +481,47 @@ async def test_must_post_repeats_are_skipped(storage: NewsStorage, make_item) ->
     assert await poller.run_once() == 2
     assert publisher.posted == [1, 3]
     assert storage.filter_new([2]) == set()  # the repeat is recorded, never retried
+
+
+async def test_claude_drops_reworded_must_post_repeats(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    items = [
+        make_item(1, text="$NVDA - *NVIDIA'S ABOUT-FACE ON HUANG", link="https://x.com/DeItaone/status/1"),
+        make_item(2, text="NVIDIA REVERSES HUANG DECISION", link="https://x.com/financialjuice/status/2"),
+    ]
+    publisher = FakePublisher()
+    scorer = FakeScorer({2: 1})  # Claude: repeat of the DeItaone post
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage, scorer,
+        priority_accounts=frozenset({"deitaone"}), must_post_keywords=MUST,
+    )
+    assert await poller.run_once() == 1
+    assert publisher.posted == [1]
+    assert scorer.recent[0] == ["$NVDA - *NVIDIA'S ABOUT-FACE ON HUANG"]
+    assert storage.filter_new([2]) == set()
+
+
+async def test_late_accounts_are_held(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    now = datetime(2026, 11, 24, 12, tzinfo=TASHKENT)
+    items = [
+        make_item(1, ts=now.timestamp() - 60, text="NVIDIA UP 3%", link="https://x.com/financialjuice/status/1"),
+        make_item(2, ts=now.timestamp() - 600, text="NASDAQ UP 1%", link="https://x.com/financialjuice/status/2"),
+    ]
+    publisher = FakePublisher()
+    poller = filtered_poller(
+        FakeNews(items), publisher, storage, must_post_keywords=MUST,
+        late_accounts=frozenset({"financialjuice"}), late_hold=180,
+    )
+    assert await poller.run_once() == 1
+    assert publisher.posted == [2]
+    assert storage.filter_new([1]) == {1}  # still waiting, not dropped
+
+
+async def test_recent_posts_survive_restart(storage: NewsStorage, make_item) -> None:  # type: ignore[no-untyped-def]
+    first = filtered_poller(FakeNews([make_item(1, text="NASDAQ 100 DROPS 2%")]), FakePublisher(), storage, must_post_keywords=MUST)
+    await first.run_once()
+    publisher = FakePublisher()
+    restarted = filtered_poller(
+        FakeNews([make_item(2, text="NASDAQ 100 DROPS, DOWN 2%")]), publisher, storage, must_post_keywords=MUST
+    )
+    await restarted.run_once()
+    assert publisher.posted == []

@@ -3,11 +3,11 @@
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from app.database.models import NewsScore, ProcessedNews
+from app.database.models import NewsScore, ProcessedNews, RecentPost
 from app.services.importance import ImportanceScore
 from app.utils.logger import get_logger
 
@@ -108,6 +108,27 @@ class NewsStorage:
                     or_(NewsScore.category.is_(None), NewsScore.category != PRIORITY_CATEGORY),
                 )
             ) or 0
+
+    # ---- recent posts (repeat check) -----------------------------------------
+
+    def save_recent_post(self, hid: int, text: str, keep: int = 200) -> None:
+        with self._session_factory() as session:
+            session.add(RecentPost(hid=hid, text=text[:500]))
+            session.flush()
+            cutoff = session.scalar(
+                select(RecentPost.id).order_by(RecentPost.id.desc()).offset(keep).limit(1)
+            )
+            if cutoff is not None:
+                session.execute(delete(RecentPost).where(RecentPost.id <= cutoff))
+            session.commit()
+
+    def recent_posted_texts(self, limit: int) -> list[str]:
+        """The last `limit` posted headlines, oldest first."""
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(RecentPost.text).order_by(RecentPost.id.desc()).limit(limit)
+            ).all()
+        return list(reversed(rows))
 
     def mark_many(self, hids: Iterable[int]) -> int:
         """Record many hids in one transaction (initial sync). Returns how many were new."""

@@ -52,3 +52,22 @@ class NewsScore(Base):
     posted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+
+
+class RecentPost(Base):
+    """Text of posted headlines, so the repeat check survives restarts.
+
+    A separate table, so existing databases need no migration. Old rows are
+    pruned; only the latest few are ever read.
+    """
+
+    __tablename__ = "recent_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hid: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    text: Mapped[str] = mapped_column(String(500), nullable=False)
+    posted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )

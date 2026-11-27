@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # X accounts whose items are always posted, instantly: no importance
     # scoring, no daily cap or pacing, no pause between posts.
     priority_x_accounts: str = Field("DeItaone", alias="PRIORITY_X_ACCOUNTS")
+    # Accounts that usually report news before other sources. Their items wait
+    # LATE_HOLD seconds, so the other source's version is posted first and
+    # theirs is skipped as a repeat.
+    late_x_accounts: str = Field("financialjuice", alias="LATE_X_ACCOUNTS")
+    late_hold: int = Field(180, alias="LATE_HOLD", ge=0, le=1800)
     # Headlines mentioning any of these (whole words, case-insensitive) are
     # posted instantly from ANY source, even excluded accounts, without
     # scoring or the daily cap. Repeats of a recent post are still skipped.
@@ -129,6 +134,10 @@ class Settings(BaseSettings):
     @property
     def excluded_accounts(self) -> frozenset[str]:
         return _account_set(self.excluded_x_accounts)
+
+    @property
+    def late_accounts(self) -> frozenset[str]:
+        return _account_set(self.late_x_accounts) - self.priority_accounts
 
     @property
     def must_post(self) -> tuple[str, ...]:
